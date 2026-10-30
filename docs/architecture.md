@@ -1,91 +1,116 @@
-# RecallWeaver 系统架构设计
+# RecallWeaver 系统架构
 
-## 1. 系统目标与边界
+## 1. 范围与运行模型
 
-RecallWeaver 是一个运行在 Python 进程内的轻量级记忆存储与检索组件。它将记忆正文、实体关系、有效时间和检索索引保存在本地 SQLite 数据库中，不要求独立数据库服务、向量数据库或图数据库。公开 API 提供记忆写入和关键词召回；更复杂的实体抽取、关系建模及语义检索可由上层应用或扩展模块承担。
+RecallWeaver 是嵌入 Python 应用的本地记忆组件。API、业务逻辑、图关系、全文索引和数据存储运行在同一进程与 SQLite 数据库中，无需常驻数据库服务。`RecallWeaverAPI` 为主要对外门面；LLM 抽取器是可选组件，调用方可在写入前使用它把自然语言转换为三元组。
 
 ```mermaid
 flowchart TB
-    U[调用方 / Agent]
-    L5[L5 接口层<br/>api.remember / api.recall]
-    L4[L4 业务调度层<br/>MemoryManager / Retriever]
-    L3[L3 核心算法层<br/>DecayEngine / 检索排序 / FTS5]
-    L2[L2 数据持久层<br/>Database / SQLite / schema]
-    L1[L1 配置层<br/>Settings / 环境变量 / .env]
-    DB[(recallweaver.db)]
-
-    U --> L5 --> L4 --> L3 --> L2 --> DB
-    L1 -. 提供 db_path 与衰减默认配置 .-> L2
-    L1 -. 提供运行参数 .-> L3
+    U[调用方 / Agent] --> API[RecallWeaverAPI]
+    API --> EX[可选：LLMExtractor]
+    EX --> MM[MemoryManager]
+    API --> MM
+    MM --> GRAPH[GraphManager / edges]
+    MM --> DB[Database 事务]
+    GRAPH --> DB
+    DB --> SQLITE[(SQLite)]
+    SQLITE --> FTS[memories_fts / FTS5]
+    API --> RET[Retriever]
+    RET --> FTS
+    RET --> DECAY[DecayEngine]
+    API --> GRAPH
+    GRAPH --> API
+    DECAY --> API
+    API --> U
+    CFG[Settings / 环境变量] -. 数据库路径和运行配置 .-> API
 ```
 
-## 2. 五层结构
+## 2. 分层结构
 
-| 层级 | 主要职责 | 当前实现 |
+| 层级 | 责任 | 主要模块 |
 |---|---|---|
-| L1 配置层 | 集中管理数据库位置及运行参数，允许用环境配置覆盖默认值。 | `config.py` 中的 `Settings`；默认数据库路径为 `recallweaver.db`，默认衰减系数为 `0.01`。 |
-| L2 数据库层 | 建立 SQLite 连接、启用外键约束、执行 schema 或版本迁移，并将 SQLite 错误转换为存储错误。 | `db.py`、`migrations/runner.py`、`schema.sql` 与 `migrations/0001_init.sql`。 |
-| L3 核心算法层 | 执行全文检索、关键词匹配及记忆衰减分数的计算；维护 FTS5 内容索引。 | `retrieval.py`、`decay_engine.py`；FTS5 同步由数据库触发器完成。 |
-| L4 业务调度层 | 组织记忆写入、冲突失效、候选检索、实时评分与结果排序。 | `memory_manager.py`、`retrieval.py`。 |
-| L5 接口层 | 提供稳定、简单的 Python 调用入口，并将具体实现委托给业务层。 | `api.py` 导出的 `remember()` 与 `recall()`。 |
+| L1 配置 | 读取数据库路径、服务密钥及算法参数；默认值可由环境变量和 `.env` 覆盖。 | `config.py` |
+| L2 数据库 | 管理 SQLite 连接、外键、事务、表结构及迁移；在事务结束时提交，异常时回滚。 | `db.py`、`schema.sql`、`migrations/` |
+| L3 核心算法 | 执行 FTS5/LIKE 检索、图遍历及实时衰减评分。 | `retrieval.py`、`graph.py`、`decay_engine.py` |
+| L4 业务调度 | 写入纯文本记忆、创建实体关系、关闭旧事实并插入新版本，合并及排序检索候选。 | `memory_manager.py`、`retrieval.py` |
+| L5 接口 | 输入校验、依赖装配、统一结果模型与异常边界。 | `api.py`、`cli.py` |
 
-各层通过模块边界协作。数据库连接由 `Database.get_connection()` 上下文管理器负责关闭和事务提交；操作异常会显式转换为 `StorageError`，而不是由接口层自行拼接 SQL。
+## 3. 写入链路
 
-## 3. `api.remember()` 数据流
-
-下图展示默认公开写入 API 的完整路径。SQLite 的 `memories_ai` 触发器在同一数据库写事务中同步 FTS5 索引。
+抽取不是数据库写入的隐式副作用：应用可调用 `LLMExtractor.extract()`，再把抽取结果传给 `RecallWeaverAPI.remember_triple()`。纯文本则通过 `add_memory()` 单独写入 `memories`，并由 SQLite 触发器同步到 FTS5。
 
 ```mermaid
 sequenceDiagram
     participant Caller as 调用方
-    participant API as api.remember()
-    participant Manager as MemoryManager.remember()
-    participant DBMgr as Database.get_connection()
-    participant SQLite as SQLite
-    participant FTS as memories_fts
+    participant Extractor as LLMExtractor（可选）
+    participant API as RecallWeaverAPI
+    participant Manager as MemoryManager
+    participant DB as Database / SQLite
+    participant Graph as entities / edges
 
-    Caller->>API: remember(content, base_weight)
-    API->>Manager: 委托写入
-    Manager->>Manager: 生成 UUID、Unix 秒级时间戳和默认租户
-    Manager->>DBMgr: 获取连接
-    DBMgr->>SQLite: connect + PRAGMA foreign_keys=ON
-    Manager->>SQLite: INSERT OR IGNORE 默认租户
-    Manager->>SQLite: INSERT memories（初始化权重与时间字段）
-    SQLite->>FTS: memories_ai 触发器写入正文索引
-    SQLite-->>DBMgr: 执行成功
-    DBMgr->>SQLite: COMMIT 并关闭连接
-    Manager-->>API: 返回 memory UUID
-    API-->>Caller: 返回 memory UUID
+    Caller->>Extractor: extract(text)
+    Extractor-->>Caller: subject / predicate / object_
+    Caller->>API: remember_triple(subject, predicate, object_)
+    API->>API: Pydantic 入参校验
+    API->>Manager: remember_with_conflict_resolution(...)
+    Manager->>DB: 打开同一事务
+    DB-->>Manager: 返回连接
+    Manager->>Graph: 查找或创建 subject / object 实体
+    Manager->>Graph: 查找同租户、同主谓的当前边
+    alt 事实完全相同
+        Manager->>DB: 幂等返回，不增加重复边
+    else 已有不同客体
+        Manager->>DB: 关闭旧边 valid_to
+        Manager->>DB: 插入新边 valid_from
+    else 新主谓关系
+        Manager->>DB: 插入新边 valid_from
+    end
+    DB-->>Manager: 提交；失败时回滚整个事务
+    Manager-->>API: 写入结果
+    API-->>Caller: bool
 ```
 
-如果事务中的 SQLite 操作失败，连接上下文会回滚，并以 `StorageError` 报告失败；调用方不会收到成功形态的记忆 ID。
+整个图事实变更通过同一个连接完成。旧边失效和新边插入不会分属两个事务，因此插入失败时旧边的 `valid_to` 也会回滚。`edges.valid_from` 和 `valid_to` 使用 UTC ISO 8601 文本；记忆表的 `valid_from`、`valid_to` 与 `tx_time` 当前以整数 Unix 时间戳存储，使用前应依据表结构解释其单位。
 
-## 4. 检索与降级路径
+## 4. 混合检索与返回
 
-`api.recall(query, limit)` 将调用委托给 `Retriever.search()`。检索首先尝试通过 `memories_fts` 执行 FTS5 `MATCH` 查询，并限制候选集规模；当 FTS5 查询报错或没有命中时，改用 `content LIKE '%query%'` 进行子串兜底。LIKE 路径对中文等不适配当前 FTS 分词配置的输入更有机会取得结果，但属于较慢的匹配方式。
+`RecallWeaverAPI.recall(query, limit, tenant_id)` 先校验请求，再调用 `Retriever.search()` 获取文本候选，并调用 `GraphManager.query_multi_hop()` 尝试图谱候选。接口按记忆 ID 或图路径去重；记忆候选由 `DecayEngine` 计算当前分数，随后降序排序并截取 `limit`，以 `MemoryOut` 模型返回。
 
-候选记录的实时衰减分数在 Python 层计算，随后按分数降序排列并应用调用方的 `limit`。FTS5 是加速及英文/分词检索路径，不是数据的唯一存储；正文仍保存在 `memories` 表中。
+文本检索优先使用 FTS5 `MATCH`。如果 FTS5 查询失败或没有结果，检索器使用 `content LIKE '%query%'` 进行子串降级。该路径能覆盖中文及不符合 FTS 查询语法的输入，但可能扫描较多正文；它不是向量语义检索。FTS5 是 `memories` 的外部内容索引，写入、更新和删除触发器负责同步索引。
 
-## 5. 核心机制
+```mermaid
+flowchart LR
+    Q[查询与租户] --> API[RecallWeaverAPI.recall]
+    API --> TEXT[Retriever.search]
+    TEXT --> FTS{FTS5 命中?}
+    FTS -- 是 --> CAND[文本候选]
+    FTS -- 否或查询错误 --> LIKE[LIKE 子串降级]
+    LIKE --> CAND
+    API --> GRAPH[GraphManager.query_multi_hop]
+    GRAPH --> GCAND[图谱候选]
+    CAND --> MERGE[合并 / 去重]
+    GCAND --> MERGE
+    MERGE --> SCORE[DecayEngine 实时评分]
+    SCORE --> SORT[降序排序 / limit]
+    SORT --> OUT[MemoryOut 列表]
+```
+
+## 5. 关键设计
 
 ### 5.1 FTS5 检索降级
 
-FTS5 虚拟表以 `memories` 为外部内容表，并由插入、更新和删除触发器保持正文同步。检索时优先使用倒排全文索引，避免对全部正文逐条执行字符串匹配。当全文查询异常或无结果时，检索器使用 LIKE 兜底，提升对不适配 FTS tokenization 的查询的兼容性。该降级提高可用性，但不保证 LIKE 具有 FTS5 的性能，也不等同于语义向量检索。
+FTS5 倒排索引为适配其 tokenizer 和语法的查询提供快速候选。无匹配或 MATCH 失败时采用 LIKE 字面子串检索，优先保留召回可用性。LIKE 兜底不保证与 FTS5 相同的查询性能；规模增长后应通过候选上限、查询观测和索引策略控制成本。
 
-### 5.2 双时间戳与冲突保留
+### 5.2 有效时间与写入时间
 
-`memories.valid_from` 和 `memories.valid_to` 表示某条事实在业务世界中的有效区间；`memories.tx_time` 记录该记忆首次写入数据库的时间。发生冲突时，业务层将旧记录标记为 `expired` 并设置 `valid_to`，同时插入新记录，而不是覆盖旧正文。由此保留旧事实及其有效区间，便于区分“事实何时成立”与“系统何时记录它”。
-
-当前 schema 为每条记忆保存写入时间点，不保存完整的事务时间区间或每次修改快照。因此它提供业务有效时间和初始写入时间，不应被视为具备完整历史版本审计能力的通用双时态数据库。
+冲突处理不覆盖旧边，而是用 `valid_to` 结束旧事实的业务有效期，并插入新边的 `valid_from`。这样可以查询事实演进并回答“某时刻系统认为什么事实有效”。记忆记录中的 `tx_time` 记录系统写入时间，和业务有效时间语义不同。当前模型保留必要的历史事实，但不是具备完整事务时间区间审计的通用双时态数据库。
 
 ### 5.3 惰性衰减
 
-记忆分数在被读取或参与检索时根据时间差实时计算，不要求后台定时任务遍历并改写所有记录。检索路径仅对实际候选记录做计算，未被访问的记录无需周期性 I/O。`decayed_weight` 与 `last_decay_at` 字段用于保存衰减状态；当前公开检索路径使用 `DecayEngine.calculate_score()` 根据记录中的基准权重、系数、上次衰减时间和检索次数计算分数。
+分数在候选被检索时根据基准权重、衰减参数、上次衰减时间和检索次数计算。系统无需后台周期性扫描所有记忆并改写分数；计算成本集中在实际参与排序的有限候选上。
 
-## 6. 持久化对象概览
+## 6. 持久化与维护
 
-核心业务表包括租户 `tenants`、事件来源 `episodes`、记忆 `memories`、实体及别名 `entities` / `entity_aliases`、实体三元组 `edges`、记忆关系 `memory_edges`、检索审计 `retrieval_logs` 和迁移版本 `schema_migrations`。字段、约束及索引详情见[数据字典](data_model.md)。
+主要数据表包括 `tenants`、`memories`、`entities`、`entity_aliases`、`edges`、`memory_edges`、`episodes`、`retrieval_logs` 和 `schema_migrations`。数据库连接默认开启外键约束。初始化和演进结构时分别遵循 schema 初始化或版本迁移入口；详细字段定义见[数据字典](data_model.md)。
 
-## 7. 初始化与迁移
-
-数据库连接由 `Database` 管理，连接时显式启用 `PRAGMA foreign_keys = ON`。项目提供 `schema.sql` 初始化脚本和按版本记录的迁移执行器；初始迁移为 `migrations/0001_init.sql`。部署或启动代码应采用项目入口所对应的初始化/迁移流程，避免在生产数据库上手工修改结构。
+运维脚本 `scripts/healthcheck.py` 检查数据库完整性与核心表；`scripts/backup.py` 使用 SQLite 在线备份接口生成带 UTC 时间戳的独立备份。备份任务应按部署策略定期执行，并在恢复流程中验证备份文件。
