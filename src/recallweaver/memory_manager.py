@@ -93,6 +93,125 @@ class MemoryManager:
         # 只有数据库写入正常完成后才向调用方返回新记忆的标识。
         return memory_id
 
+    def remember_with_conflict(
+        self,
+        content: str,
+        conflict_keyword: str,
+        base_weight: float = 5.0,
+    ) -> str:
+        """保存新记忆，并在同一事务内使匹配的旧记忆失效。
+
+        双时间戳模型通过 ``valid_to`` 记录旧记忆在现实业务时间上的失效
+        时刻，同时保留旧记录本身及其事务时间信息，从而不抹除历史事实。
+        只有当前仍有效且状态为 active 的同租户记录会被设为 expired；
+        新记录则从本次写入的时间点开始生效。
+
+        参数:
+            content: 新记忆的正文内容。
+            conflict_keyword: 用于定位需要失效的旧记忆的字面子字符串。
+            base_weight: 新记忆的初始基础权重，默认值为 5.0。
+
+        返回:
+            新建记忆的 UUID 字符串。
+
+        异常:
+            StorageError: 数据库连接、更新旧记忆或插入新记忆失败时抛出。
+                所有写入使用同一连接和事务，因此失败时不会只保留部分变更。
+        """
+        # 在任何数据库操作之前生成新记录 ID 和统一时间点，保证新旧记录
+        # 的 valid_to、valid_from、tx_time 与创建时间保持一致。
+        memory_id = str(uuid.uuid4())
+        now = int(time.time())
+        tenant_id = "default"
+
+        try:
+            # 整个冲突处理过程复用同一连接；上下文管理器会在正常完成后提交，
+            # 若中途抛出异常则关闭连接并由 SQLite 回滚尚未提交的事务。
+            with db_manager.get_connection() as conn:
+                # 在外键约束生效的连接上先确保默认租户存在，避免后续记忆写入失败。
+                # 使用参数绑定传值，并以 OR IGNORE 支持重复调用。
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO tenants (id, name, created_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (tenant_id, "Default Tenant", now),
+                )
+
+                # 步骤 A：只使默认租户中正文包含冲突关键词、当前仍有效且处于
+                # active 状态的旧记忆失效。instr 按字面子字符串匹配，避免 LIKE
+                # 中的百分号或下划线被误解释为通配符；关键词仍通过占位符绑定。
+                conn.execute(
+                    """
+                    UPDATE memories
+                    SET status = ?, valid_to = ?
+                    WHERE tenant_id = ?
+                      AND instr(content, ?) > 0
+                      AND status = ?
+                      AND valid_to IS NULL
+                    """,
+                    (
+                        "expired",
+                        now,
+                        tenant_id,
+                        conflict_keyword,
+                        "active",
+                    ),
+                )
+
+                # 步骤 B：新增取代旧事实的记忆。明确提供所有必要的初始字段，
+                # valid_to 设为 NULL 表示新记录目前仍有效；未列出的可选字段
+                # 由 schema 中的默认值或 NULL 处理。
+                conn.execute(
+                    """
+                    INSERT INTO memories (
+                        id,
+                        tenant_id,
+                        content,
+                        memory_type,
+                        instruction_weight,
+                        emotion_weight,
+                        base_weight,
+                        decay_lambda,
+                        retrieval_count,
+                        last_decay_at,
+                        decayed_weight,
+                        valid_from,
+                        valid_to,
+                        tx_time,
+                        status,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+                    """,
+                    (
+                        memory_id,
+                        tenant_id,
+                        content,
+                        "fact",
+                        1.0,
+                        1.0,
+                        base_weight,
+                        0.01,
+                        0,
+                        now,
+                        base_weight,
+                        now,
+                        now,
+                        "active",
+                        now,
+                    ),
+                )
+        except StorageError:
+            # 数据库管理器已将 SQLite 错误转换为项目异常；保留该异常及原始原因。
+            raise
+        except sqlite3.Error as exc:
+            # 防止未来数据库管理器实现变化导致底层 SQLite 异常泄漏到公共接口。
+            raise StorageError(f"处理记忆冲突失败：{exc}") from exc
+
+        # 只有租户准备、旧记忆失效和新记忆插入全部成功后才返回新 ID。
+        return memory_id
+
     def get_memory(self, memory_id: str) -> Dict[str, Any]:
         """根据记忆 ID 读取记录；若记录不存在则抛出存储异常。"""
         # 通过统一连接管理器执行参数化查询，避免手动拼接 SQL 值。
