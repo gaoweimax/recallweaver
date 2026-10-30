@@ -30,3 +30,8 @@ class RetrievalError(RecallWeaverError):
     检索错误：比如去数据库里搜记忆的时候，搜索引擎崩溃了。
     """
     pass
+
+
+class ExtractionError(RecallWeaverError):
+    """语言模型调用或响应解析失败。"""
+    pass
