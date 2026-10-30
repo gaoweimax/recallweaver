@@ -1,6 +1,6 @@
 import math
 import time
-from typing import Dict, Any
+from typing import Any
 
 class DecayEngine:
     """
@@ -44,7 +44,7 @@ class DecayEngine:
         return score
 
     @classmethod
-    def update_decay(cls, memory_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def update_decay(cls, memory_dict: dict[str, Any]) -> dict[str, Any]:
         """
         更新一条记忆的字典，返回最新的分数和时间戳，准备存回数据库。
         """

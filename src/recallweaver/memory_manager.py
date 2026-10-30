@@ -7,25 +7,29 @@ import time
 # sqlite3.Error 用于识别并转换数据库驱动产生的底层 SQL 异常。
 import sqlite3
 from datetime import datetime, timezone
-# Dict 和 Any 用于描述以数据库列名为键、字段值为任意类型的记忆记录。
-from typing import Dict, Any, Optional
+from typing import Any
 
 # 导入项目默认数据库管理器，所有读写操作都通过其连接上下文管理器完成。
 from recallweaver.db import Database, db_manager
 # 导入遗忘引擎，以便基于记忆权重和时间数据计算实时分数。
 from recallweaver.decay_engine import DecayEngine
 # 导入统一存储异常，让调用方无需直接依赖 SQLite 异常类型。
-from recallweaver.errors import DatabaseError, StorageError
+from recallweaver.errors import DatabaseError, StorageError, ValidationError
 
 
 class MemoryManager:
     """负责将记忆写入数据库，并提供记忆读取与实时分数计算。"""
 
-    def __init__(self, database: Optional[Database] = None) -> None:
+    def __init__(self, database: Database | None = None) -> None:
         """初始化管理器；未指定时复用项目默认数据库管理器。"""
         self.db = database or db_manager
 
-    def remember(self, content: str, base_weight: float = 1.0) -> str:
+    def remember(
+        self,
+        content: str,
+        base_weight: float = 1.0,
+        tenant_id: str = "default",
+    ) -> str:
         """保存一条新记忆，并返回其唯一 ID。
 
         在写入记忆前先确保默认租户存在，因为 memories.tenant_id 是必填
@@ -35,9 +39,6 @@ class MemoryManager:
         memory_id = str(uuid.uuid4())
         # 使用秒级 Unix 时间戳初始化本次记忆相关的时间字段。
         now = int(time.time())
-        # 当前方法尚未接收调用方提供的租户，因此将新记忆保存至默认租户。
-        tenant_id = "default"
-
         try:
             # 使用数据库管理器提供的上下文管理器，正常结束时提交并关闭连接。
             with self.db.get_connection() as conn:
@@ -230,6 +231,12 @@ class MemoryManager:
         的当前事实不会创建冗余边；值发生变化时，旧边失效和新边插入在同一
         数据库事务中完成，以确保失败时不会留下半完成状态。
         """
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (subject, predicate, object_, tenant_id)
+        ):
+            raise ValidationError("事实字段和租户标识均不能为空字符串")
+
         now_ts = datetime.now(timezone.utc).isoformat(
             timespec="microseconds"
         ).replace("+00:00", "Z")
@@ -338,7 +345,7 @@ class MemoryManager:
 
         return True
 
-    def get_memory(self, memory_id: str) -> Dict[str, Any]:
+    def get_memory(self, memory_id: str) -> dict[str, Any]:
         """根据记忆 ID 读取记录；若记录不存在则抛出存储异常。"""
         # 通过统一连接管理器执行参数化查询，避免手动拼接 SQL 值。
         with self.db.get_connection() as conn:

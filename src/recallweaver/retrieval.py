@@ -1,23 +1,42 @@
-from typing import List, Dict, Any
-from recallweaver.db import db_manager
+from typing import Any
+
+from recallweaver.db import Database, db_manager
 from recallweaver.decay_engine import DecayEngine
 from recallweaver.errors import StorageError
 
+
 class Retriever:
     """记忆检索引擎"""
-    def search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+
+    def __init__(
+        self,
+        database: Database | None = None,
+        decay_engine: DecayEngine | None = None,
+    ) -> None:
+        """接收数据库和评分引擎依赖，缺省时维持旧调用方式。"""
+        self.db = database or db_manager
+        self.decay_engine = decay_engine or DecayEngine()
+
+    def search(
+        self,
+        query: str,
+        limit: int = 5,
+        tenant_id: str = "default",
+    ) -> list[dict[str, Any]]:
         try:
-            with db_manager.get_connection() as conn:
+            with self.db.get_connection() as conn:
                 rows = []
                 # 策略 1：尝试 FTS5 全文检索（极速匹配英文和完整分词）
                 try:
                     sql_fts = """
                         SELECT m.* FROM memories m
                         JOIN memories_fts f ON m.rowid = f.rowid
-                        WHERE f.memories_fts MATCH ? AND m.status = 'active'
+                        WHERE f.memories_fts MATCH ?
+                          AND m.status = 'active'
+                          AND m.tenant_id = ?
                         LIMIT 50
                     """
-                    cursor = conn.execute(sql_fts, (f"{query}*",))
+                    cursor = conn.execute(sql_fts, (f"{query}*", tenant_id))
                     rows = cursor.fetchall()
                 except Exception:
                     pass # 如果 FTS 匹配不到，静默降级
@@ -27,16 +46,17 @@ class Retriever:
                     sql_like = """
                         SELECT * FROM memories 
                         WHERE content LIKE ? AND status = 'active'
+                          AND tenant_id = ?
                         LIMIT 50
                     """
-                    cursor = conn.execute(sql_like, (f"%{query}%",))
+                    cursor = conn.execute(sql_like, (f"%{query}%", tenant_id))
                     rows = cursor.fetchall()
 
                 results = []
                 for row in rows:
                     item = dict(row)
                     # 实时重算衰减分数
-                    item["realtime_score"] = DecayEngine.calculate_score(
+                    item["realtime_score"] = self.decay_engine.calculate_score(
                         base_weight=item["base_weight"],
                         decay_lambda=item["decay_lambda"],
                         last_decay_at=item["last_decay_at"],

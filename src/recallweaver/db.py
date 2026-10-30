@@ -40,7 +40,7 @@ class Database:
             if conn:
                 conn.close()
 
-    def init_db(self):
+    def init_db(self, verbose: bool = True):
         """读取 schema.sql 并初始化数据库"""
         # 定位到项目根目录的 schema.sql
         schema_path = Path(__file__).parent.parent.parent / "schema.sql"
@@ -55,7 +55,8 @@ class Database:
             with self.get_connection() as conn:
                 conn.executescript(schema_sql)
             
-            print(f"✅ 数据库初始化成功！位置: {self.db_path}")
+            if verbose:
+                print(f"数据库初始化成功！位置: {self.db_path}")
             
         except Exception as e:
             raise StorageError(f"建表失败: {str(e)}")

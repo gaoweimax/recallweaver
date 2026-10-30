@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recallweaver"
+version = "0.1.0"
+description = "A lightweight local memory engine for AI agents"
+requires-python = "==3.11.9"
+dependencies = [
+    "click>=8.1",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+]
+
+[project.scripts]
+rw = "recallweaver.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]

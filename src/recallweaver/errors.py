@@ -11,6 +11,10 @@ class ConfigError(RecallWeaverError):
     """
     pass
 
+class ValidationError(RecallWeaverError):
+    """公开 API 入参或出参不符合契约。"""
+    pass
+
 class StorageError(RecallWeaverError):
     """
     存储错误：比如数据库文件被锁住了，或者 SQL 语句写错了导致插入失败。

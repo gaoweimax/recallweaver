@@ -8,8 +8,18 @@
 from .config import settings
 # 暴露项目异常体系的基类，便于调用方统一捕获 RecallWeaver 相关错误。
 from .errors import RecallWeaverError
+from .errors import DatabaseError, ValidationError
 # 暴露数据库管理类和默认管理器，分别用于创建自定义实例或直接操作默认数据库。
 from .db import Database, db_manager
+from .api import RecallWeaverAPI
 
 # 显式声明包的公共接口，避免内部实现细节被误认为稳定的公开 API。
-__all__ = ["settings", "RecallWeaverError", "Database", "db_manager"]
+__all__ = [
+    "Database",
+    "DatabaseError",
+    "RecallWeaverAPI",
+    "RecallWeaverError",
+    "ValidationError",
+    "db_manager",
+    "settings",
+]

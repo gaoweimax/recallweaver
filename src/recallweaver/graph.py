@@ -4,7 +4,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from recallweaver.db import db_manager
+from recallweaver.db import Database, db_manager
 from recallweaver.errors import StorageError
 
 
@@ -14,6 +14,10 @@ class GraphManager:
     实体和关系边均按租户隔离；写入一条边时，实体、租户和边在同一
     SQLite 事务中创建，避免出现只有一端实体或不完整关系的状态。
     """
+
+    def __init__(self, database: Database | None = None) -> None:
+        """接收可选数据库依赖；默认复用项目级数据库管理器。"""
+        self.db = database or db_manager
 
     def add_edge(
         self,
@@ -33,7 +37,7 @@ class GraphManager:
         ).replace("+00:00", "Z")
 
         try:
-            with db_manager.get_connection() as conn:
+            with self.db.get_connection() as conn:
                 # 边和实体均引用租户外键；确保租户存在，并使重复写入保持幂等。
                 conn.execute(
                     """
@@ -101,7 +105,7 @@ class GraphManager:
         entity_name: str,
         depth: int = 2,
         tenant_id: str = "default",
-    ) -> list:
+    ) -> list[dict[str, str | int | None]]:
         """从指定实体出发，沿有向关系查询最多 ``depth`` 跳的邻居。
 
         返回值按遍历深度排序，每项包含起点、终点实体名称及 ID、经过的
@@ -112,18 +116,21 @@ class GraphManager:
             if not isinstance(depth, int) or isinstance(depth, bool) or depth < 1:
                 raise ValueError("depth 必须是大于或等于 1 的整数")
 
-            with db_manager.get_connection() as conn:
+            with self.db.get_connection() as conn:
                 rows = conn.execute(
                     """
                     WITH RECURSIVE graph_path(
-                        start_id, end_id, relation, depth, visited_ids
+                        start_id, end_id, relation, depth, visited_ids,
+                        memory_id, valid_from
                     ) AS (
                         SELECT
                             edge.subject_id,
                             edge.object_id,
                             edge.predicate,
                             1,
-                            '/' || edge.subject_id || '/' || edge.object_id || '/'
+                            '/' || edge.subject_id || '/' || edge.object_id || '/',
+                            edge.memory_id,
+                            edge.valid_from
                         FROM edges AS edge
                         JOIN entities AS start_entity
                           ON start_entity.id = edge.subject_id
@@ -139,7 +146,9 @@ class GraphManager:
                             edge.object_id,
                             graph_path.relation || ' -> ' || edge.predicate,
                             graph_path.depth + 1,
-                            graph_path.visited_ids || edge.object_id || '/'
+                            graph_path.visited_ids || edge.object_id || '/',
+                            edge.memory_id,
+                            edge.valid_from
                         FROM edges AS edge
                         JOIN graph_path
                           ON edge.subject_id = graph_path.end_id
@@ -157,7 +166,9 @@ class GraphManager:
                         graph_path.end_id AS entity_id,
                         end_entity.name AS entity_name,
                         graph_path.relation,
-                        graph_path.depth
+                        graph_path.depth,
+                        graph_path.memory_id,
+                        graph_path.valid_from
                     FROM graph_path
                     JOIN entities AS start_entity
                       ON start_entity.id = graph_path.start_id
@@ -175,3 +186,16 @@ class GraphManager:
             raise
         except Exception as exc:
             raise StorageError(f"查询图谱邻居失败：{exc}") from exc
+
+    def query_multi_hop(
+        self,
+        entity_name: str,
+        depth: int = 2,
+        tenant_id: str = "default",
+    ) -> list[dict[str, str | int | None]]:
+        """提供多跳查询的显式入口，复用有界递归 CTE 遍历。"""
+        return self.get_neighbors(
+            entity_name=entity_name,
+            depth=depth,
+            tenant_id=tenant_id,
+        )

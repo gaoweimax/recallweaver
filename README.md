@@ -3,7 +3,7 @@
 > **A lightweight, dynamic memory engine for LLM Agents.**
 > **一个面向大语言模型（LLM）的轻量级动态记忆引擎。**
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python 3.11.9](https://img.shields.io/badge/python-3.11.9-blue.svg)](https://www.python.org/)
 [![SQLite](https://img.shields.io/badge/SQLite-FTS5-green.svg)](https://sqlite.org/)
 [![No Docker](https://img.shields.io/badge/Docker-Not%20Required-orange.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
