@@ -4,7 +4,7 @@
 
 ## 1. 通用约定
 
-- ID 字段使用 `TEXT` 保存 UUID 或稳定标识；时间字段使用 `INTEGER` 保存 Unix 秒级时间戳。
+- ID 字段使用 `TEXT` 保存 UUID 或稳定标识；大多数时间字段使用 `INTEGER` 保存 Unix 秒级时间戳。`edges.valid_from` 和 `edges.valid_to` 使用 UTC ISO 8601 `TEXT`，以支持事实冲突时的可读业务时间区间。
 - 外键约束由每个数据库连接上的 `PRAGMA foreign_keys = ON` 启用。
 - `DEFAULT` 是数据库缺省值，不自动意味着 `NOT NULL`。
 - `ON DELETE CASCADE` 表示父记录删除时同步删除从属记录；`ON DELETE SET NULL` 表示保留从属记录但解除来源关联。
@@ -93,8 +93,8 @@
 | `predicate` | TEXT | 非空 | 关系谓词，如“居住于”。 |
 | `object_id` | TEXT | 非空；外键 `entities(id)`，删除实体时级联删除 | 三元组宾语实体。 |
 | `memory_id` | TEXT | 可空；外键 `memories(id)`，删除记忆时设为 `NULL` | 支撑该关系的记忆来源。 |
-| `valid_from` | INTEGER | 非空 | 关系在业务时间上的生效时刻。 |
-| `valid_to` | INTEGER | 可空 | 关系失效时刻；`NULL` 表示当前没有记录失效时间。 |
+| `valid_from` | TEXT | 非空 | 关系在业务时间上的生效时刻，格式为 UTC ISO 8601（例如 `2026-10-30T12:00:00.000000Z`）。 |
+| `valid_to` | TEXT | 可空 | 关系失效时刻，格式为 UTC ISO 8601；`NULL` 表示当前关系仍有效。 |
 | `confidence` | REAL | 可空；默认 `1.0` | 关系可信度。 |
 | `created_at` | INTEGER | 非空 | 关系记录创建时间。 |
 

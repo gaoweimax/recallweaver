@@ -4,7 +4,7 @@ from contextlib import contextmanager
 
 # 导入配置和异常
 from recallweaver.config import settings
-from recallweaver.errors import StorageError
+from recallweaver.errors import DatabaseError, StorageError
 
 class Database:
     """
@@ -30,7 +30,12 @@ class Database:
         except sqlite3.Error as e:
             if conn:
                 conn.rollback()
-            raise StorageError(f"数据库操作失败: {str(e)}")
+            raise DatabaseError(f"数据库操作失败: {str(e)}") from e
+        except BaseException:
+            # 不仅 SQL 错误，业务层抛出的异常也必须撤销尚未提交的写入。
+            if conn:
+                conn.rollback()
+            raise
         finally:
             if conn:
                 conn.close()

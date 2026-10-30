@@ -2,6 +2,7 @@
 
 import time
 import uuid
+from datetime import datetime, timezone
 
 from recallweaver.db import db_manager
 from recallweaver.errors import StorageError
@@ -27,6 +28,9 @@ class GraphManager:
         ``name`` 和 ``canonical_name`` 创建。边的方向为 subject 到 object_。
         """
         now = int(time.time())
+        valid_from = datetime.now(timezone.utc).isoformat(
+            timespec="microseconds"
+        ).replace("+00:00", "Z")
 
         try:
             with db_manager.get_connection() as conn:
@@ -83,7 +87,7 @@ class GraphManager:
                         subject_id,
                         predicate,
                         object_id,
-                        now,
+                        valid_from,
                         now,
                     ),
                 )

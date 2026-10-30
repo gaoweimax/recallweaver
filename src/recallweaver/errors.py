@@ -17,6 +17,10 @@ class StorageError(RecallWeaverError):
     """
     pass
 
+class DatabaseError(StorageError):
+    """数据库事务或 SQL 操作失败，且事务已回滚。"""
+    pass
+
 class RetrievalError(RecallWeaverError):
     """
     检索错误：比如去数据库里搜记忆的时候，搜索引擎崩溃了。

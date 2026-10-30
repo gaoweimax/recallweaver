@@ -6,19 +6,24 @@ import uuid
 import time
 # sqlite3.Error 用于识别并转换数据库驱动产生的底层 SQL 异常。
 import sqlite3
+from datetime import datetime, timezone
 # Dict 和 Any 用于描述以数据库列名为键、字段值为任意类型的记忆记录。
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # 导入项目默认数据库管理器，所有读写操作都通过其连接上下文管理器完成。
-from recallweaver.db import db_manager
+from recallweaver.db import Database, db_manager
 # 导入遗忘引擎，以便基于记忆权重和时间数据计算实时分数。
 from recallweaver.decay_engine import DecayEngine
 # 导入统一存储异常，让调用方无需直接依赖 SQLite 异常类型。
-from recallweaver.errors import StorageError
+from recallweaver.errors import DatabaseError, StorageError
 
 
 class MemoryManager:
     """负责将记忆写入数据库，并提供记忆读取与实时分数计算。"""
+
+    def __init__(self, database: Optional[Database] = None) -> None:
+        """初始化管理器；未指定时复用项目默认数据库管理器。"""
+        self.db = database or db_manager
 
     def remember(self, content: str, base_weight: float = 1.0) -> str:
         """保存一条新记忆，并返回其唯一 ID。
@@ -35,7 +40,7 @@ class MemoryManager:
 
         try:
             # 使用数据库管理器提供的上下文管理器，正常结束时提交并关闭连接。
-            with db_manager.get_connection() as conn:
+            with self.db.get_connection() as conn:
                 # 必须先写入租户记录，以满足 memories.tenant_id 的外键约束。
                 # INSERT OR IGNORE 使该操作在默认租户已存在时仍可安全重复执行。
                 conn.execute(
@@ -127,7 +132,7 @@ class MemoryManager:
         try:
             # 整个冲突处理过程复用同一连接；上下文管理器会在正常完成后提交，
             # 若中途抛出异常则关闭连接并由 SQLite 回滚尚未提交的事务。
-            with db_manager.get_connection() as conn:
+            with self.db.get_connection() as conn:
                 # 在外键约束生效的连接上先确保默认租户存在，避免后续记忆写入失败。
                 # 使用参数绑定传值，并以 OR IGNORE 支持重复调用。
                 conn.execute(
@@ -212,10 +217,131 @@ class MemoryManager:
         # 只有租户准备、旧记忆失效和新记忆插入全部成功后才返回新 ID。
         return memory_id
 
+    def remember_with_conflict_resolution(
+        self,
+        subject: str,
+        predicate: str,
+        object_: str,
+        tenant_id: str = "default",
+    ) -> bool:
+        """以双时间戳写入事实，并原子化解决同一谓词的值冲突。
+
+        ``valid_from`` 和 ``valid_to`` 使用 UTC ISO 8601 文本格式。完全重复
+        的当前事实不会创建冗余边；值发生变化时，旧边失效和新边插入在同一
+        数据库事务中完成，以确保失败时不会留下半完成状态。
+        """
+        now_ts = datetime.now(timezone.utc).isoformat(
+            timespec="microseconds"
+        ).replace("+00:00", "Z")
+        created_at = int(time.time())
+
+        try:
+            with self.db.get_connection() as conn:
+                try:
+                    # 租户、实体和边在同一事务内创建，满足外键并保证原子性。
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO tenants (id, name, created_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (tenant_id, tenant_id, created_at),
+                    )
+
+                    def get_or_create_entity(name: str) -> str:
+                        """获取租户内实体 ID；缺失时创建规范名称相同的新实体。"""
+                        row = conn.execute(
+                            """
+                            SELECT id
+                            FROM entities
+                            WHERE tenant_id = ? AND name = ?
+                            ORDER BY id
+                            LIMIT 1
+                            """,
+                            (tenant_id, name),
+                        ).fetchone()
+                        if row is not None:
+                            return str(row["id"])
+
+                        entity_id = str(uuid.uuid4())
+                        conn.execute(
+                            """
+                            INSERT INTO entities (
+                                id, tenant_id, name, canonical_name, created_at
+                            )
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (entity_id, tenant_id, name, name, created_at),
+                        )
+                        return entity_id
+
+                    subject_id = get_or_create_entity(subject)
+                    object_id = get_or_create_entity(object_)
+
+                    current_edges = conn.execute(
+                        """
+                        SELECT id, object_id
+                        FROM edges
+                        WHERE subject_id = ?
+                          AND predicate = ?
+                          AND valid_to IS NULL
+                          AND tenant_id = ?
+                        """,
+                        (subject_id, predicate, tenant_id),
+                    ).fetchall()
+
+                    # 相同的当前事实为幂等成功，不更新也不插入冗余数据。
+                    if current_edges and all(
+                        edge["object_id"] == object_id for edge in current_edges
+                    ):
+                        return True
+
+                    if current_edges:
+                        # 关闭所有同主体、同谓词的当前版本，避免历史脏重复留下
+                        # 多条有效边；随后仅插入一个新的当前事实。
+                        conn.execute(
+                            """
+                            UPDATE edges
+                            SET valid_to = ?
+                            WHERE subject_id = ?
+                              AND predicate = ?
+                              AND valid_to IS NULL
+                              AND tenant_id = ?
+                            """,
+                            (now_ts, subject_id, predicate, tenant_id),
+                        )
+
+                    conn.execute(
+                        """
+                        INSERT INTO edges (
+                            id, tenant_id, subject_id, predicate, object_id,
+                            valid_from, valid_to, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+                        """,
+                        (
+                            str(uuid.uuid4()),
+                            tenant_id,
+                            subject_id,
+                            predicate,
+                            object_id,
+                            now_ts,
+                            created_at,
+                        ),
+                    )
+                except sqlite3.Error as exc:
+                    # 抛出异常退出 with 块，数据库上下文管理器将回滚整笔事务。
+                    raise DatabaseError(
+                        f"写入或解决事实冲突失败：{exc}"
+                    ) from exc
+        except StorageError:
+            raise
+
+        return True
+
     def get_memory(self, memory_id: str) -> Dict[str, Any]:
         """根据记忆 ID 读取记录；若记录不存在则抛出存储异常。"""
         # 通过统一连接管理器执行参数化查询，避免手动拼接 SQL 值。
-        with db_manager.get_connection() as conn:
+        with self.db.get_connection() as conn:
             # 使用占位符传递 ID，查询该记忆的全部字段。
             row = conn.execute(
                 "SELECT * FROM memories WHERE id = ?",
