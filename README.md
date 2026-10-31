@@ -12,15 +12,13 @@
 
 [核心痛点](#-行业痛点与破局) · [架构设计](#-核心架构) · [快速开始](#-快速开始) · [API 示例](#-api-使用指南) · [性能基准](#-性能基准)
 
-</div>
-
 ---
 
 ## 🎬 极客演示 (Demo)
 
 > 以下是在真实 DeepSeek 接入下，AI 拥有长期记忆并维持“毒舌”人设的高光时刻：
 
-![RecallWeaver Demo](assets/demo.gif)
+![RecallWeaver Demo](./assets/demo.gif)
 
 ---
 
