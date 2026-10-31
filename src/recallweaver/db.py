@@ -183,7 +183,26 @@ class Database:
                 schema_sql = f.read()
 
             with self.get_connection() as conn:
+                fts_definition = conn.execute(
+                    """
+                    SELECT sql
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'memories_fts'
+                    """
+                ).fetchone()
+                rebuild_fts = (
+                    fts_definition is not None
+                    and "tokenize='trigram'"
+                    not in str(fts_definition["sql"]).replace(" ", "").lower()
+                )
+                if rebuild_fts:
+                    conn.execute("DROP TABLE memories_fts")
+
                 conn.executescript(schema_sql)
+                if rebuild_fts:
+                    conn.execute(
+                        "INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')"
+                    )
             
             if verbose:
                 print(f"数据库初始化成功！位置: {self.db_path}")

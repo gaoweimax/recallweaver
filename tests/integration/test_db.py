@@ -4,7 +4,10 @@
 import sqlite3
 
 # 从包公开接口导入默认数据库管理器，验证外部调用方可复用的初始化路径。
-from recallweaver.db import db_manager
+import pytest
+
+from recallweaver.db import Database, db_manager
+from recallweaver.errors import DatabaseError
 
 
 def test_init_db_creates_core_tables(tmp_path, monkeypatch):
@@ -30,3 +33,49 @@ def test_init_db_creates_core_tables(tmp_path, monkeypatch):
     # 记忆表和实体表是基础数据模型的核心，初始化后两者都必须存在。
     assert "memories" in table_names
     assert "entities" in table_names
+
+
+def test_execute_with_retry_replays_operation_after_locked_error(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A transient lock retries the whole callback and records recovery."""
+    database = Database(str(tmp_path / "retry-test.db"))
+    attempts = 0
+
+    def operation() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise sqlite3.OperationalError("database is locked")
+        return "committed"
+
+    monkeypatch.setattr("recallweaver.db.time.sleep", lambda _: None)
+
+    result = database.execute_with_retry(operation)
+
+    assert result == "committed"
+    assert attempts == 3
+    assert database.retry_attempts == 2
+
+
+def test_execute_with_retry_fails_after_five_retries(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A permanently locked operation is bounded to one attempt plus retries."""
+    database = Database(str(tmp_path / "retry-exhausted.db"))
+    attempts = 0
+
+    def operation() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("recallweaver.db.time.sleep", lambda _: None)
+
+    with pytest.raises(DatabaseError, match="5 次重试均已耗尽"):
+        database.execute_with_retry(operation)
+
+    assert attempts == 6
+    assert database.retry_attempts == 5

@@ -1,5 +1,6 @@
 """依赖注入式 RecallWeaver API 与 Pydantic 契约模型。"""
 
+import time
 from typing import Any, NoReturn, TypeVar
 
 from pydantic import BaseModel, ValidationError as PydanticValidationError
@@ -21,6 +22,8 @@ from recallweaver.models import (
     TextMemoryIn,
     TripleIn,
 )
+from recallweaver.observability.logging import get_logger
+from recallweaver.observability.metrics import MetricsCollector
 from recallweaver.retrieval import Retriever
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -89,12 +92,38 @@ class RecallWeaverAPI:
             database=self.database_manager,
             decay_engine=self.decay_engine,
         )
+        self.metrics = MetricsCollector()
+        self.logger = get_logger(__name__)
         try:
             self.database_manager.init_db(verbose=False)
         except Exception as exc:
             _raise_database_error("database initialization", exc)
 
     def remember_triple(
+        self,
+        subject: str,
+        predicate: str,
+        object_: str,
+        tenant_id: str = "default",
+    ) -> bool:
+        """Insert a fact and record request count plus safe error events."""
+        try:
+            return self._remember_triple(
+                subject,
+                predicate,
+                object_,
+                tenant_id=tenant_id,
+            )
+        except Exception as exc:
+            self.logger.error(
+                "remember_triple failed: %s",
+                type(exc).__name__,
+            )
+            raise
+        finally:
+            self.metrics.record_remember()
+
+    def _remember_triple(
         self,
         subject: str,
         predicate: str,
@@ -171,6 +200,26 @@ class RecallWeaverAPI:
             _raise_database_error("add memory", exc)
 
     def recall(
+        self,
+        query: str,
+        limit: int = 5,
+        tenant_id: str = "default",
+    ) -> list[MemoryOut]:
+        """Recall memories while recording duration and safe error events."""
+        started_at = time.perf_counter()
+        try:
+            return self._recall(query, limit=limit, tenant_id=tenant_id)
+        except Exception as exc:
+            self.logger.error(
+                "recall failed: %s",
+                type(exc).__name__,
+            )
+            raise
+        finally:
+            duration_ms = (time.perf_counter() - started_at) * 1_000
+            self.metrics.record_recall(duration_ms)
+
+    def _recall(
         self,
         query: str,
         limit: int = 5,

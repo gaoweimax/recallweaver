@@ -30,6 +30,19 @@ class MemoryManager:
         base_weight: float = 1.0,
         tenant_id: str = "default",
     ) -> str:
+        """Persist a memory, retrying the complete transaction on lock errors."""
+        return self._remember_once(
+            content,
+            base_weight=base_weight,
+            tenant_id=tenant_id,
+        )
+
+    def _remember_once(
+        self,
+        content: str,
+        base_weight: float = 1.0,
+        tenant_id: str = "default",
+    ) -> str:
         """保存一条新记忆，并返回其唯一 ID。
 
         在写入记忆前先确保默认租户存在，因为 memories.tenant_id 是必填
@@ -39,67 +52,65 @@ class MemoryManager:
         memory_id = str(uuid.uuid4())
         # 使用秒级 Unix 时间戳初始化本次记忆相关的时间字段。
         now = int(time.time())
-        try:
-            # 使用数据库管理器提供的上下文管理器，正常结束时提交并关闭连接。
-            with self.db.get_connection() as conn:
-                # 必须先写入租户记录，以满足 memories.tenant_id 的外键约束。
-                # INSERT OR IGNORE 使该操作在默认租户已存在时仍可安全重复执行。
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO tenants (id, name, created_at)
-                    VALUES (?, ?, ?)
-                    """,
-                    (tenant_id, "Default Tenant", now),
+        def insert_memory(conn: sqlite3.Connection) -> None:
+            """Insert the tenant and memory as one retryable transaction."""
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO tenants (id, name, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (tenant_id, "Default Tenant", now),
+            )
+            conn.execute(
+                """
+                INSERT INTO memories (
+                    id, tenant_id, content, memory_type, instruction_weight,
+                    emotion_weight, base_weight, decay_lambda, retrieval_count,
+                    last_decay_at, decayed_weight, valid_from, tx_time, status,
+                    created_at
                 )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    memory_id,
+                    tenant_id,
+                    content,
+                    "fact",
+                    1.0,
+                    1.0,
+                    base_weight,
+                    0.01,
+                    0,
+                    now,
+                    base_weight,
+                    now,
+                    now,
+                    "active",
+                    now,
+                ),
+            )
 
-                # 写入完整的记忆初始状态；其余可空字段由数据库默认值或 NULL 处理。
-                conn.execute(
-                    """
-                    INSERT INTO memories (
-                        id,
-                        tenant_id,
-                        content,
-                        memory_type,
-                        instruction_weight,
-                        emotion_weight,
-                        base_weight,
-                        decay_lambda,
-                        retrieval_count,
-                        last_decay_at,
-                        decayed_weight,
-                        valid_from,
-                        tx_time,
-                        status,
-                        created_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        memory_id,
-                        tenant_id,
-                        content,
-                        "fact",
-                        1.0,
-                        1.0,
-                        base_weight,
-                        0.01,
-                        0,
-                        now,
-                        base_weight,
-                        now,
-                        now,
-                        "active",
-                        now,
-                    ),
-                )
-        except sqlite3.Error as exc:
-            # 将底层 SQLite 异常转换成项目统一的存储异常，并保留原始错误链。
-            raise StorageError(f"保存记忆失败：{exc}") from exc
+        self.db.run_transaction(insert_memory)
 
         # 只有数据库写入正常完成后才向调用方返回新记忆的标识。
         return memory_id
 
     def remember_with_conflict(
+        self,
+        content: str,
+        conflict_keyword: str,
+        base_weight: float = 5.0,
+    ) -> str:
+        """Resolve a text-memory conflict with whole-transaction retries."""
+        return self.db.execute_with_retry(
+            lambda: self._remember_with_conflict_once(
+                content,
+                conflict_keyword,
+                base_weight=base_weight,
+            )
+        )
+
+    def _remember_with_conflict_once(
         self,
         content: str,
         conflict_keyword: str,
@@ -219,6 +230,23 @@ class MemoryManager:
         return memory_id
 
     def remember_with_conflict_resolution(
+        self,
+        subject: str,
+        predicate: str,
+        object_: str,
+        tenant_id: str = "default",
+    ) -> bool:
+        """Resolve a fact conflict, retrying after rolling back locked attempts."""
+        return self.db.execute_with_retry(
+            lambda: self._remember_with_conflict_resolution_once(
+                subject,
+                predicate,
+                object_,
+                tenant_id=tenant_id,
+            )
+        )
+
+    def _remember_with_conflict_resolution_once(
         self,
         subject: str,
         predicate: str,
