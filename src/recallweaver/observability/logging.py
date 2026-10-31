@@ -20,22 +20,29 @@ _MAX_MESSAGE_LENGTH: Final[int] = 100
 _LOGGER_HANDLER_MARKER: Final[str] = "_recallweaver_json_handler"
 
 
-def _sanitize_message(message: str) -> str:
-    """Redact recognized credentials and truncate oversized log messages.
+def _sanitize(text: str) -> str:
+    """Redact credentials and bound arbitrary text before it reaches a log.
 
     Args:
-        message: Fully rendered logging message.
+        text: Log message, exception text, or other potentially sensitive text.
 
     Returns:
-        A safe single-line message no longer than 100 characters.
+        Sanitized, single-line text no longer than 100 characters.
     """
     sanitized = _SECRET_PATTERN.sub(
         lambda match: f"{match.group('prefix')}[REDACTED]",
-        message,
+        text,
     )
     sanitized = sanitized.replace("\r", "\\r").replace("\n", "\\n")
     if len(sanitized) > _MAX_MESSAGE_LENGTH:
-        sanitized = sanitized[: _MAX_MESSAGE_LENGTH - 3] + "..."
+        prefix = sanitized[:20]
+        redaction_marker = "[REDACTED]"
+        marker_position = sanitized.find(redaction_marker)
+        if 0 <= marker_position < 40:
+            marker_end = marker_position + len(redaction_marker)
+            if marker_end > len(prefix):
+                prefix = sanitized[:marker_end]
+        sanitized = prefix + "..." + sanitized[-20:]
     return sanitized
 
 
@@ -56,11 +63,14 @@ class JsonFormatter(logging.Formatter):
             timezone.utc,
         ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         payload = {
+            "time": timestamp,
             "timestamp": timestamp,
             "level": record.levelname,
             "module": record.name,
-            "message": _sanitize_message(record.getMessage()),
+            "message": _sanitize(record.getMessage()),
         }
+        if record.exc_info:
+            payload["exception"] = _sanitize(self.formatException(record.exc_info))
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 

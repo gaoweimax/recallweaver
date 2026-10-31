@@ -107,6 +107,7 @@ class RecallWeaverAPI:
         tenant_id: str = "default",
     ) -> bool:
         """Insert a fact and record request count plus safe error events."""
+        started_at = time.perf_counter()
         try:
             return self._remember_triple(
                 subject,
@@ -118,10 +119,12 @@ class RecallWeaverAPI:
             self.logger.error(
                 "remember_triple failed: %s",
                 type(exc).__name__,
+                exc_info=True,
             )
             raise
         finally:
-            self.metrics.record_remember()
+            duration_ms = (time.perf_counter() - started_at) * 1_000
+            self.metrics.record_remember(duration_ms)
 
     def _remember_triple(
         self,
@@ -213,6 +216,7 @@ class RecallWeaverAPI:
             self.logger.error(
                 "recall failed: %s",
                 type(exc).__name__,
+                exc_info=True,
             )
             raise
         finally:

@@ -36,7 +36,8 @@ def test_json_formatter_redacts_secrets_and_truncates_long_messages() -> None:
     assert "do-not-log" not in formatted
     assert "[REDACTED]" in payload["message"]
     assert len(payload["message"]) <= 100
-    assert payload["message"].endswith("...")
+    assert "..." in payload["message"]
+    assert payload["message"].endswith("private text ")
 
 
 def test_metrics_collector_is_thread_safe_for_recall_updates() -> None:
@@ -70,6 +71,20 @@ def test_metrics_collector_is_thread_safe_for_recall_updates() -> None:
     assert snapshot["cache_hits"] == 0
 
 
+def test_metrics_records_remember_count_and_latency() -> None:
+    """Remember attempts expose counts and optional duration in snapshots."""
+    collector = MetricsCollector()
+
+    collector.record_remember(2.5)
+    collector.record_remember(3.5)
+
+    snapshot = collector.get_snapshot()
+    assert snapshot["total_remember"] == 2
+    assert snapshot["total_remember_requests"] == 2
+    assert snapshot["remember_latency_sum"] == 6.0
+    assert snapshot["total_recall"] == 0
+
+
 def test_api_records_recall_and_remember_requests(tmp_path) -> None:
     """Public API methods record successful and failed request attempts."""
     api = RecallWeaverAPI(str(tmp_path / "observability.sqlite3"))
@@ -79,8 +94,10 @@ def test_api_records_recall_and_remember_requests(tmp_path) -> None:
     assert results
 
     snapshot = api.metrics.get_snapshot()
+    assert snapshot["total_remember"] == 1
+    assert snapshot["total_recall"] == 1
     assert snapshot["total_remember_requests"] == 1
     assert snapshot["total_recall_requests"] == 1
+    assert snapshot["remember_latency_sum"] > 0
     assert snapshot["recall_latency_sum"] > 0
     assert snapshot["recall_latency_avg_ms"] > 0
-

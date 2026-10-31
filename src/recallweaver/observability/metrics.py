@@ -15,6 +15,7 @@ class MetricsCollector:
         self._total_recall_requests = 0
         self._total_remember_requests = 0
         self._recall_latency_sum = 0.0
+        self._remember_latency_sum = 0.0
         self._cache_hits = 0
 
     def record_recall(self, duration_ms: float) -> None:
@@ -38,12 +39,30 @@ class MetricsCollector:
             self._total_recall_requests += 1
             self._recall_latency_sum += float(duration_ms)
 
-    def record_remember(self) -> None:
-        """Record one remember-triple attempt."""
+    def record_remember(self, duration_ms: float | None = None) -> None:
+        """Record one remember-triple attempt and optional elapsed time.
+
+        Args:
+            duration_ms: Optional non-negative finite duration in milliseconds.
+
+        Raises:
+            TypeError: If the duration is not numeric or is a boolean.
+            ValueError: If the duration is negative or not finite.
+        """
+        if duration_ms is not None:
+            if isinstance(duration_ms, bool) or not isinstance(
+                duration_ms, (int, float)
+            ):
+                raise TypeError("duration_ms 必须是数值")
+            if not math.isfinite(duration_ms) or duration_ms < 0:
+                raise ValueError("duration_ms 必须是有限的非负数")
+
         with self._lock:
             self._total_remember_requests += 1
+            if duration_ms is not None:
+                self._remember_latency_sum += float(duration_ms)
 
-    def get_snapshot(self) -> dict[str, int | float]:
+    def get_snapshot(self) -> dict[str, float]:
         """Return a consistent copy of all current metrics.
 
         Returns:
@@ -53,10 +72,17 @@ class MetricsCollector:
         with self._lock:
             recall_requests = self._total_recall_requests
             latency_sum = self._recall_latency_sum
+            remember_latency_sum = self._remember_latency_sum
             return {
-                "total_recall_requests": recall_requests,
-                "total_remember_requests": self._total_remember_requests,
+                "total_recall": float(recall_requests),
+                "total_remember": float(self._total_remember_requests),
+                "total_recall_requests": float(recall_requests),
+                "total_remember_requests": float(self._total_remember_requests),
                 "recall_latency_sum": latency_sum,
+                "remember_latency_sum": remember_latency_sum,
+                "average_recall_latency": (
+                    latency_sum / recall_requests if recall_requests else 0.0
+                ),
                 "recall_latency_avg_ms": (
                     latency_sum / recall_requests if recall_requests else 0.0
                 ),
