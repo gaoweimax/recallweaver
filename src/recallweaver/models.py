@@ -84,6 +84,7 @@ class MemoryOut(BaseModel):
     relation: str | None = None
     depth: int | None = None
     tenant_id: str | None = None
+    trace_id: str | None = None
     score: float
     valid_from: str | int | None = None
     valid_to: str | int | None = None

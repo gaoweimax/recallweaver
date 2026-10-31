@@ -1,7 +1,5 @@
 """Integration tests for the validated API and Click command-line surface."""
 
-import json
-
 from click.testing import CliRunner
 import pytest
 
@@ -46,28 +44,29 @@ def test_api_hybrid_recall_ranks_text_and_graph_results(tmp_path) -> None:
 
 
 def test_cli_execution(tmp_path, monkeypatch) -> None:
-    """Click commands persist facts, print scored JSON, and label fact history."""
+    """CLI commands persist facts and render rich recall and history views."""
     monkeypatch.setattr(settings, "db_path", str(tmp_path / "cli.db"))
     runner = CliRunner()
 
     add_result = runner.invoke(cli, ["add", "张三 住在 北京"])
     assert add_result.exit_code == 0
+    assert "✅ 成功: 记忆已写入，ID:" in add_result.output
     assert "事实已保存" in add_result.output
 
     recall_result = runner.invoke(cli, ["recall", "张三"])
     assert recall_result.exit_code == 0
-    parsed_results = json.loads(recall_result.output)
-    assert parsed_results
-    assert "score" in parsed_results[0]
-    assert "valid_from" in parsed_results[0]
+    assert "得分(渐变)" in recall_result.output
+    assert "Trace ID" in recall_result.output
+    assert "记忆内容" in recall_result.output
+    assert "生效时间" in recall_result.output
 
     update_result = runner.invoke(cli, ["add", "张三 住在 上海"])
     assert update_result.exit_code == 0
 
     history_result = runner.invoke(cli, ["history", "张三", "住在"])
     assert history_result.exit_code == 0
-    assert "[已失效]" in history_result.output
-    assert "[当前有效]" in history_result.output
+    assert "[❌ 失效]" in history_result.output
+    assert "[✅ 有效]" in history_result.output
     assert "valid_from=" in history_result.output
     assert "valid_to=" in history_result.output
 

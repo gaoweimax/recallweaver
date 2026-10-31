@@ -1,4 +1,3 @@
-import logging
 import re
 import sqlite3
 from typing import Any
@@ -6,8 +5,9 @@ from typing import Any
 from recallweaver.db import Database, db_manager
 from recallweaver.decay_engine import DecayEngine
 from recallweaver.errors import StorageError
+from recallweaver.observability.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _QUERY_TOKEN_PATTERN = re.compile(r"[\u3400-\u9fff]+|[^\W_]+", re.UNICODE)
 _CJK_PATTERN = re.compile(r"^[\u3400-\u9fff]+$")
@@ -145,6 +145,20 @@ class Retriever:
                     for item in results
                     if item["realtime_score"] >= self.SCORE_THRESHOLD
                 ]
+                filtered_count = len(results) - len(qualified_results)
+                if filtered_count:
+                    logger.info(
+                        "🗑️ 剔除低分噪音 %d 条 (score < %.1f)",
+                        filtered_count,
+                        self.SCORE_THRESHOLD,
+                        extra={
+                            "action": "filter_low_score_memories",
+                            "details": {
+                                "filtered_count": filtered_count,
+                                "score_threshold": self.SCORE_THRESHOLD,
+                            },
+                        },
+                    )
                 return qualified_results[:limit]
                 
         except Exception as e:

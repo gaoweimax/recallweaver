@@ -31,7 +31,7 @@ def test_json_formatter_redacts_secrets_and_truncates_long_messages() -> None:
     assert "\n" not in formatted
     assert payload["level"] == "ERROR"
     assert payload["module"] == "recallweaver.test"
-    assert payload["timestamp"].endswith("Z")
+    assert len(payload["timestamp"].rsplit(".", maxsplit=1)[-1]) == 3
     assert "secret-token" not in formatted
     assert "do-not-log" not in formatted
     assert "[REDACTED]" in payload["message"]
