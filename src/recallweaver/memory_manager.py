@@ -6,7 +6,7 @@ import uuid
 import time
 # sqlite3.Error 用于识别并转换数据库驱动产生的底层 SQL 异常。
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 # 导入项目默认数据库管理器，所有读写操作都通过其连接上下文管理器完成。
@@ -286,7 +286,7 @@ class MemoryManager:
 
                     current_edges = conn.execute(
                         """
-                        SELECT id, object_id
+                        SELECT id, object_id, valid_from
                         FROM edges
                         WHERE subject_id = ?
                           AND predicate = ?
@@ -303,6 +303,23 @@ class MemoryManager:
                         return True
 
                     if current_edges:
+                        latest_valid_from = max(
+                            datetime.fromisoformat(
+                                str(edge["valid_from"]).replace(
+                                    "Z", "+00:00"
+                                )
+                            )
+                            for edge in current_edges
+                        )
+                        current_valid_from = datetime.now(timezone.utc)
+                        if current_valid_from <= latest_valid_from:
+                            current_valid_from = latest_valid_from + timedelta(
+                                microseconds=1
+                            )
+                        now_ts = current_valid_from.isoformat(
+                            timespec="microseconds"
+                        ).replace("+00:00", "Z")
+
                         # 关闭所有同主体、同谓词的当前版本，避免历史脏重复留下
                         # 多条有效边；随后仅插入一个新的当前事实。
                         conn.execute(
