@@ -56,6 +56,20 @@ def _create_test_client(
     return TestClient(application), create_mock
 
 
+def test_health_check(
+    api: RecallWeaverAPI,
+    mocker: MockerFixture,
+) -> None:
+    """Health endpoint reports that the HTTP service is live."""
+    client, _ = _create_test_client(api, mocker)
+
+    with client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_chat_endpoint(
     api: RecallWeaverAPI,
     mocker: MockerFixture,
@@ -100,4 +114,3 @@ def test_invalid_input(
 
     assert response.status_code == 422
     create_mock.assert_not_awaited()
-

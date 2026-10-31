@@ -183,6 +183,11 @@ def create_app(
     )
     application.state.logger = logger
 
+    @application.get("/health")
+    async def health_check() -> dict[str, str]:
+        """Return a lightweight liveness response."""
+        return {"status": "ok"}
+
     @application.middleware("http")
     async def add_trace_id(request: Request, call_next: Any) -> Any:
         """Attach a request-scoped trace ID to logs and response headers."""
@@ -348,7 +353,7 @@ def create_app(
                 },
             )
             raise HTTPException(
-                status_code=502,
+                status_code=500,
                 detail="The language model is temporarily unavailable.",
             ) from exc
 
@@ -359,7 +364,7 @@ def create_app(
                 extra={"action": "deepseek_empty_reply", "details": {}},
             )
             raise HTTPException(
-                status_code=502,
+                status_code=500,
                 detail="The language model returned an invalid response.",
             )
 
