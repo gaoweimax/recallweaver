@@ -373,4 +373,8 @@ class MemoryManager:
             decay_lambda=memory["decay_lambda"],
             last_decay_at=memory["last_decay_at"],
             retrieval_count=memory["retrieval_count"],
+            usefulness_weight=memory.get(
+                "usefulness_weight",
+                memory["base_weight"],
+            ),
         )

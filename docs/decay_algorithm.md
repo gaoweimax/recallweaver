@@ -9,13 +9,16 @@ RecallWeaver 为每条记忆提供随时间降低、可被反复检索强化的�
 当前评分公式为：
 
 ```text
-score(t) = base_weight * exp(-lambda * delta_t) * (1 + alpha * retrieval_count)**beta
+usefulness_boost = min(max(alpha * retrieval_count * usefulness_weight, 0), 0.5)
+retrieval_factor = min((1 + usefulness_boost)**beta, 1.5)
+score(t) = base_weight * exp(-lambda * delta_t) * retrieval_factor
 ```
 
 其中：
 
 - `exp(-lambda * delta_t)` 是指数时间衰减项。
-- `(1 + alpha * retrieval_count)**beta` 是重复检索带来的强化项。
+- `usefulness_weight` 控制检索次数加成的有效程度，默认值为 `1.0`；权重为 `0` 时，重复检索不再增加分数。
+- `usefulness_boost` 将加权检索次数的增幅限制在 `0.5`，并将最终检索倍率硬性限制在 `1.5`，避免高 `beta` 或极大检索次数造成无界增长。
 - 对计算出的原始分数执行冷库阈值处理：若分数严格小于 `0.05`，返回 `0.0`；等于或大于 `0.05` 时保留原分数。
 
 实现以 Unix 秒级时间戳计算 `delta_t`。若当前时钟早于 `last_decay_at`，实现将负时间差截为零，避免未来时间戳造成增长异常。
@@ -30,10 +33,11 @@ score(t) = base_weight * exp(-lambda * delta_t) * (1 + alpha * retrieval_count)*
 | `retrieval_count` | `0` | 记忆被检索的计数因子。数据库列默认值为 `0`，公式将其作为非负整数输入使用。 |
 | `alpha` | `0.1` | 每次检索增加的相对强化幅度。`calculate_score()` 的默认参数值为 `0.1`。 |
 | `beta` | `1.0` | 强化项的幂指数，控制强化曲线形状。`calculate_score()` 的默认参数值为 `1.0`。 |
+| `usefulness_weight` | `1.0` | 检索加成的有用性权重。检索引擎在没有独立权重列时使用现有 `base_weight` 作为逐条记忆的有用性权重；直接调用评分函数时可单独指定。 |
 
 `lambda` 的实际时间尺度取决于 `delta_t` 的单位。由于当前 `delta_t` 以秒计，系数 `0.01` 表示每秒衰减，而不是每小时或每天衰减；若产品需要更慢的时间尺度，应统一修改时间单位或重新设定衰减系数，并相应验证分数行为。
 
-在当前默认 `beta = 1.0` 时，强化项为线性增长；检索次数越多，分数越高，理论上可以超过 `base_weight`。公式不包含上限截断。检索器使用记忆表保存的 `retrieval_count`，但现有公开检索路径没有在每次召回时递增该字段，因此强化作用取决于其他写入方是否维护此计数。
+默认 `beta = 1.0` 时，权重后的检索强化项线性增长，但最高只能将检索倍率提高到 `1.5`。检索器使用记忆表保存的 `retrieval_count`，但现有公开检索路径没有在每次召回时递增该字段，因此强化作用取决于其他写入方是否维护此计数。
 
 ## 4. 冷库阈值
 
@@ -41,7 +45,15 @@ score(t) = base_weight * exp(-lambda * delta_t) * (1 + alpha * retrieval_count)*
 
 阈值的目的，是将长期未被强化、且重要性已显著衰减的内容视为冷记忆，同时保留可追溯数据。若上层需要彻底归档、限制零分记录返回或执行物理清理，需要额外明确相应的数据生命周期策略。
 
-## 5. 惰性计算（Lazy Evaluation）
+## 5. 用有用性权重和分数截断抑制噪音
+
+社区反馈指出，高频闲聊可能依靠检索次数加成顶掉稳定的核心事实。现在检索加成先乘以 `usefulness_weight`，并被限制在 `0.5` 的增幅内（最终倍率最高 `1.5`）；没有独立有用性字段的现有记忆使用 `base_weight` 作为其权重来源。因此，低基础权重的闲聊不会因计数膨胀而获得与核心事实相同的强化。
+
+此外，`Retriever.search()` 在排序后、应用 `limit` 前会移除实时分数低于 `0.3` 的候选。这个检索信噪比阈值不同于 `0.05` 冷库阈值：前者决定结果能否返回给 API，后者将过度衰减的分数归零。两者共同阻止低价值内容占据有限的召回名额，同时保留高权重事实的正常返回。
+
+该策略的作用边界也需要注意：如果噪音记忆被赋予了与核心事实相同的基础权重，它仍可能达到返回阈值。写入时正确区分基础权重，并保留对 `usefulness_weight` 的显式控制，才能让频率只强化真正有用的记忆。
+
+## 6. 惰性计算（Lazy Evaluation）
 
 ### 定时全表更新的成本
 
@@ -53,11 +65,11 @@ score(t) = base_weight * exp(-lambda * delta_t) * (1 + alpha * retrieval_count)*
 
 当前 `Retriever.search()` 从 FTS5 或 LIKE 取有限候选集，再逐条计算实时分数、排序并截取 `limit`。这提高了读写效率并避免周期性维护任务，但并不消除候选查询本身的成本：LIKE 兜底仍可能扫描正文，候选上限和适当索引仍然重要。此外，若必须让数据库中的 `decayed_weight` 始终反映当前时刻，惰性计算本身不保证该列持续刷新；应以检索时计算的实时分数作为当前路径的评分依据。
 
-## 6. 计算步骤
+## 7. 计算步骤
 
 1. 读取 `base_weight`、`decay_lambda`、`last_decay_at` 和 `retrieval_count`。
 2. 计算 `delta_t = now - last_decay_at`；若结果为负，令其为零。
 3. 计算时间衰减项 `exp(-decay_lambda * delta_t)`。
-4. 计算检索强化项 `(1 + alpha * retrieval_count)**beta`。
-5. 将基础权重与两项相乘；若结果低于 `0.05`，返回 `0.0`。
-6. 检索流程按实时分数降序排列候选项并应用 `limit`。
+4. 计算 `alpha * retrieval_count * usefulness_weight`，将其限制在 `[0, 0.5]`，再应用 `beta` 和 `1.5` 的检索倍率上限。
+5. 将基础权重、时间衰减项和检索倍率相乘；若结果低于 `0.05`，返回 `0.0`。
+6. 检索流程按实时分数降序排列候选项，过滤低于 `0.3` 的结果，再应用 `limit`。

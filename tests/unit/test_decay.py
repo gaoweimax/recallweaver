@@ -43,3 +43,37 @@ def test_high_retrieval_count_boosts_current_memory_above_one() -> None:
 
     # 分数必须严格高于 1.0，验证检索加成确实参与最终计算。
     assert score > 1.0
+
+
+def test_retrieval_boost_uses_usefulness_weight_and_is_capped() -> None:
+    """无用性权重应缩小检索加成，且极高次数也不能突破 0.5 倍。"""
+    score_without_retrieval = DecayEngine.calculate_score(
+        base_weight=1.0,
+        decay_lambda=0.0,
+        last_decay_at=0,
+        retrieval_count=0,
+    )
+    score_with_no_usefulness = DecayEngine.calculate_score(
+        base_weight=1.0,
+        decay_lambda=0.0,
+        last_decay_at=0,
+        retrieval_count=100_000,
+        usefulness_weight=0.0,
+    )
+    score_with_low_usefulness = DecayEngine.calculate_score(
+        base_weight=1.0,
+        decay_lambda=0.0,
+        last_decay_at=0,
+        retrieval_count=10,
+        usefulness_weight=0.25,
+    )
+    score_at_cap = DecayEngine.calculate_score(
+        base_weight=1.0,
+        decay_lambda=0.0,
+        last_decay_at=0,
+        retrieval_count=100_000,
+    )
+
+    assert score_with_no_usefulness == score_without_retrieval == 1.0
+    assert score_with_low_usefulness == pytest.approx(1.25)
+    assert score_at_cap == pytest.approx(1.5)

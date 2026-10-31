@@ -225,6 +225,9 @@ class RecallWeaverAPI:
                     decay_lambda=float(row["decay_lambda"]),
                     last_decay_at=int(row["last_decay_at"]),
                     retrieval_count=int(row["retrieval_count"]),
+                    usefulness_weight=float(
+                        row.get("usefulness_weight", row["base_weight"])
+                    ),
                 )
                 results.append(
                     MemoryOut(
@@ -252,6 +255,9 @@ class RecallWeaverAPI:
                         decay_lambda=float(memory["decay_lambda"]),
                         last_decay_at=int(memory["last_decay_at"]),
                         retrieval_count=int(memory["retrieval_count"]),
+                        usefulness_weight=float(
+                            memory.get("usefulness_weight", memory["base_weight"])
+                        ),
                     )
                     created_at = int(memory["created_at"])
                 else:

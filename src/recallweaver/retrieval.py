@@ -8,6 +8,8 @@ from recallweaver.errors import StorageError
 class Retriever:
     """记忆检索引擎"""
 
+    SCORE_THRESHOLD = 0.3
+
     def __init__(
         self,
         database: Database | None = None,
@@ -34,6 +36,7 @@ class Retriever:
                         WHERE f.memories_fts MATCH ?
                           AND m.status = 'active'
                           AND m.tenant_id = ?
+                        ORDER BY m.base_weight DESC, m.created_at DESC, m.id
                         LIMIT 50
                     """
                     cursor = conn.execute(sql_fts, (f"{query}*", tenant_id))
@@ -47,6 +50,7 @@ class Retriever:
                         SELECT * FROM memories 
                         WHERE content LIKE ? AND status = 'active'
                           AND tenant_id = ?
+                        ORDER BY base_weight DESC, created_at DESC, id
                         LIMIT 50
                     """
                     cursor = conn.execute(sql_like, (f"%{query}%", tenant_id))
@@ -60,13 +64,22 @@ class Retriever:
                         base_weight=item["base_weight"],
                         decay_lambda=item["decay_lambda"],
                         last_decay_at=item["last_decay_at"],
-                        retrieval_count=item["retrieval_count"]
+                        retrieval_count=item["retrieval_count"],
+                        usefulness_weight=float(
+                            item.get("usefulness_weight", item["base_weight"])
+                        ),
                     )
                     results.append(item)
 
                 # 根据实时分数降序排序
                 results.sort(key=lambda x: x["realtime_score"], reverse=True)
-                return results[:limit]
+                # 在截取数量前过滤低分候选，避免低质量记录进入上层 API。
+                qualified_results = [
+                    item
+                    for item in results
+                    if item["realtime_score"] >= self.SCORE_THRESHOLD
+                ]
+                return qualified_results[:limit]
                 
         except Exception as e:
             raise StorageError(f"检索失败: {str(e)}")
