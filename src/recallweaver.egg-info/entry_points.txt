@@ -1,0 +1,2 @@
+[console_scripts]
+rw = recallweaver.cli:cli
