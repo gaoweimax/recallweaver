@@ -87,6 +87,8 @@
 ---
 
 ## 🚀 快速开始
+# 启动 API 服务
+uvicorn src.recallweaver.server:app --reload
 
 ### 1. 克隆并安装
 
