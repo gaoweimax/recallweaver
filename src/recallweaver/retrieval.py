@@ -1,14 +1,20 @@
+import logging
+import re
+import sqlite3
 from typing import Any
 
 from recallweaver.db import Database, db_manager
 from recallweaver.decay_engine import DecayEngine
 from recallweaver.errors import StorageError
 
+logger = logging.getLogger(__name__)
+
 
 class Retriever:
     """记忆检索引擎"""
 
     SCORE_THRESHOLD = 0.3
+    MAX_QUERY_TERMS = 12
 
     def __init__(
         self,
@@ -26,23 +32,35 @@ class Retriever:
         tenant_id: str = "default",
     ) -> list[dict[str, Any]]:
         try:
+            # 将自然语言查询安全拆成 FTS5 词项，避免标点和完整句式导致
+            # MATCH 语法错误或要求整句所有词同时出现在同一条记忆中。
+            query_terms = list(dict.fromkeys(re.findall(r"\w+", query)))
+            fts_query = " OR ".join(
+                f'"{term}"*'
+                for term in query_terms[: self.MAX_QUERY_TERMS]
+            )
             with self.db.get_connection() as conn:
                 rows = []
                 # 策略 1：尝试 FTS5 全文检索（极速匹配英文和完整分词）
-                try:
-                    sql_fts = """
-                        SELECT m.* FROM memories m
-                        JOIN memories_fts f ON m.rowid = f.rowid
-                        WHERE f.memories_fts MATCH ?
-                          AND m.status = 'active'
-                          AND m.tenant_id = ?
-                        ORDER BY m.base_weight DESC, m.created_at DESC, m.id
-                        LIMIT 50
-                    """
-                    cursor = conn.execute(sql_fts, (f"{query}*", tenant_id))
-                    rows = cursor.fetchall()
-                except Exception:
-                    pass # 如果 FTS 匹配不到，静默降级
+                if fts_query:
+                    try:
+                        sql_fts = """
+                            SELECT m.* FROM memories m
+                            JOIN memories_fts f ON m.rowid = f.rowid
+                            WHERE memories_fts MATCH ?
+                              AND m.status = 'active'
+                              AND m.tenant_id = ?
+                            ORDER BY bm25(memories_fts), m.base_weight DESC,
+                                     m.created_at DESC, m.id
+                            LIMIT 50
+                        """
+                        cursor = conn.execute(sql_fts, (fts_query, tenant_id))
+                        rows = cursor.fetchall()
+                    except sqlite3.Error:
+                        logger.debug(
+                            "FTS query failed; falling back to substring search",
+                            exc_info=True,
+                        )
 
                 # 策略 2：FTS 没搜到（比如中文），直接使用 LIKE 模糊查询兜底
                 if not rows:

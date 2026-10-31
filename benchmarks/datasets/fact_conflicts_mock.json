@@ -1,0 +1,30 @@
+[
+  {
+    "subject": "A公司",
+    "predicate": "CEO",
+    "old_object": "CEO甲",
+    "new_object": "CEO乙",
+    "timestamp": "2024-01-02T09:00:00Z"
+  },
+  {
+    "subject": "A公司",
+    "predicate": "CEO",
+    "old_object": "CEO乙",
+    "new_object": "CEO丙",
+    "timestamp": "2024-01-03T09:00:00Z"
+  },
+  {
+    "subject": "A公司",
+    "predicate": "CEO",
+    "old_object": "CEO丙",
+    "new_object": "CEO丁",
+    "timestamp": "2024-01-04T09:00:00Z"
+  },
+  {
+    "subject": "A公司",
+    "predicate": "CEO",
+    "old_object": "CEO丁",
+    "new_object": "CEO戊",
+    "timestamp": "2024-01-05T09:00:00Z"
+  }
+]
