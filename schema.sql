@@ -130,7 +130,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_aliases_unique ON entity_aliases(te
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     content,
     content='memories',
-    content_rowid='rowid'
+    content_rowid='rowid',
+    tokenize='trigram'
 );
 
 -- 触发器：插入同步
