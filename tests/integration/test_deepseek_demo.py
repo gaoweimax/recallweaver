@@ -1,4 +1,4 @@
-"""Network-free integration coverage for the DeepSeek memory demo."""
+"""Network-free tests for persona graph injection and context discontinuity."""
 
 from __future__ import annotations
 
@@ -6,129 +6,107 @@ from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
-import httpx
-from openai import APITimeoutError
+from rich.console import Console
 import pytest
 from pytest_mock import MockerFixture
-from rich.console import Console
 
 from examples.deepseek_agent import DeepSeekAgent
 from recallweaver.api import RecallWeaverAPI
-
-ROUND_FOUR = (
-    "我到底能不能吃花生？我以前是住哪来着，最近搬家累死了。"
-)
 
 
 @pytest.fixture
 def demo_agent(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[RecallWeaverAPI, DeepSeekAgent, StringIO]:
-    """Create an isolated agent with a local database and captured output.
+) -> tuple[RecallWeaverAPI, DeepSeekAgent, Mock, StringIO]:
+    """Create an isolated graph database and local OpenAI-compatible mock.
 
     Args:
-        tmp_path: Per-test directory managed by pytest.
-        monkeypatch: Fixture used to provide a non-secret test API key.
+        tmp_path: Pytest's per-test temporary directory.
 
     Returns:
-        A database API, configured demo agent, and Rich output buffer.
+        The API, agent, provider create mock, and captured Rich output.
     """
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "unit-test-key")
+    api = RecallWeaverAPI(str(tmp_path / "fish-persona.sqlite3"))
+    create_mock = Mock(
+        side_effect=[
+            _completion("我在摸鱼，鱼片。"),
+            _completion("不许说我胖！只是圆润！"),
+            _completion("鱼片，我最讨厌别人说我胖！"),
+        ]
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create_mock)
+        )
+    )
     output = StringIO()
     console = Console(file=output, force_terminal=False, width=120)
-    api = RecallWeaverAPI(str(tmp_path / "deepseek-demo.sqlite3"))
-    agent = DeepSeekAgent(api=api, console=console)
-    return api, agent, output
+    agent = DeepSeekAgent(api=api, client=client, console=console)
+    return api, agent, create_mock, output
 
 
-def _mock_stream(text: str = "测试回复") -> list[Any]:
-    """Build OpenAI-compatible streaming chunks without network access.
-
-    Args:
-        text: Content returned by the mocked model.
-
-    Returns:
-        A list with the shape consumed by ``DeepSeekAgent``.
-    """
-    return [
-        SimpleNamespace(
-            choices=[
-                SimpleNamespace(delta=SimpleNamespace(content=text))
-            ]
-        )
-    ]
-
-
-def _mock_provider(
-    agent: DeepSeekAgent,
-    mocker: MockerFixture,
-    *,
-    text: str = "测试回复",
-) -> Any:
-    """Replace the provider call with an inspectable local mock.
-
-    Args:
-        agent: Agent whose SDK request must be intercepted.
-        mocker: pytest-mock fixture.
-        text: Mocked completion content.
-
-    Returns:
-        Mock for validating the request and its prompt.
-    """
-    return mocker.patch.object(
-        agent.client.chat.completions,
-        "create",
-        return_value=_mock_stream(text),
+def _completion(content: str) -> Any:
+    """Construct the response shape accessed by ``DeepSeekAgent.chat``."""
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(message=SimpleNamespace(content=content))
+        ]
     )
 
 
-def _seed_time_and_allergy_facts(api: RecallWeaverAPI) -> None:
-    """Create the historical facts needed to exercise turn-four prompting."""
-    api.remember_triple("我", "住在", "北京")
-    api.remember_triple("我", "住在", "杭州")
-    api.remember_triple("我", "过敏", "花生")
-
-
-def test_persona_and_fact_injection(
-    demo_agent: tuple[RecallWeaverAPI, DeepSeekAgent, StringIO],
-    mocker: MockerFixture,
-) -> None:
-    """Turn four sends persona, allergy, and both city versions to DeepSeek."""
-    api, agent, _ = demo_agent
-    _seed_time_and_allergy_facts(api)
-    create_mock = _mock_provider(agent, mocker)
-
-    agent.chat(ROUND_FOUR)
-
-    kwargs = create_mock.call_args.kwargs
-    assert kwargs["stream"] is True
-    prompt = next(
+def _system_prompt(call: Any) -> str:
+    """Extract the system prompt from a captured OpenAI request call."""
+    return next(
         str(message["content"])
-        for message in kwargs["messages"]
+        for message in call.kwargs["messages"]
         if message["role"] == "system"
     )
-    assert "毒舌" in prompt
-    assert "花生" in prompt
-    assert "北京(已失效)" in prompt
-    assert "杭州" in prompt
 
 
-def test_conflict_timestamp(
-    demo_agent: tuple[RecallWeaverAPI, DeepSeekAgent, StringIO],
-    mocker: MockerFixture,
+def test_persona_facts_are_recalled_after_context_reset(
+    demo_agent: tuple[RecallWeaverAPI, DeepSeekAgent, Mock, StringIO],
 ) -> None:
-    """Explicitly moving from Beijing to Hangzhou closes only the old edge."""
-    api, agent, _ = demo_agent
-    _mock_provider(agent, mocker)
+    """Round four and five prompts get their special facts from graph recall."""
+    _, agent, create_mock, output = demo_agent
+    agent.chat("大肥鱼，你今天是不是吃胖了？鱼尾都圆了。")
+    agent.clear_chat_history()
 
-    agent.chat("我以前住在北京，最近搬到了杭州。")
+    agent.chat("我回来了，你现在在干嘛？还记得我叫什么吗？")
+    fourth_request = create_mock.call_args_list[1]
+    fourth_prompt = _system_prompt(fourth_request)
+
+    assert "鱼片" in fourth_prompt
+    assert "胖" in fourth_prompt
+    assert "Token" in fourth_prompt
+    assert fourth_request.kwargs["messages"][-1] == {
+        "role": "user",
+        "content": "我回来了，你现在在干嘛？还记得我叫什么吗？",
+    }
+    assert [
+        message["role"] for message in fourth_request.kwargs["messages"]
+    ] == ["system", "user"]
+
+    agent.chat("刚刚清空了记录，你还记得你最讨厌别人说你什么吗？")
+    fifth_prompt = _system_prompt(create_mock.call_args_list[2])
+    assert "鱼片" in fifth_prompt
+    assert "胖" in fifth_prompt
+    assert "Token" in fifth_prompt
+    assert "底层召回记录" in output.getvalue()
+    assert "模拟大模型上下文爆炸" not in output.getvalue()
+
+
+def test_persona_graph_contains_all_required_dimensions(
+    demo_agent: tuple[RecallWeaverAPI, DeepSeekAgent, Mock, StringIO],
+) -> None:
+    """Initialization writes every required setting as an individual triple."""
+    api, _, _, _ = demo_agent
 
     with api.database_manager.get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT object.name AS city, edge.valid_to
+            SELECT subject.name AS subject, edge.predicate, object.name AS object
             FROM edges AS edge
             JOIN entities AS subject
               ON subject.id = edge.subject_id
@@ -138,40 +116,60 @@ def test_conflict_timestamp(
              AND object.tenant_id = edge.tenant_id
             WHERE edge.tenant_id = ?
               AND subject.name = ?
-              AND edge.predicate = ?
-              AND object.name IN (?, ?)
             """,
-            ("default", "我", "住在", "北京", "杭州"),
+            ("default", "大肥鱼"),
         ).fetchall()
 
-    validity = {str(row["city"]): row["valid_to"] for row in rows}
-    assert set(validity) == {"北京", "杭州"}
-    assert validity["北京"] is not None
-    assert validity["杭州"] is None
+    graph_facts = {
+        (str(row["subject"]), str(row["predicate"]), str(row["object"]))
+        for row in rows
+    }
+    assert graph_facts == {
+        ("大肥鱼", "身份", "拟人化蓝色鲸鱼娘桌宠"),
+        ("大肥鱼", "称呼用户", "鱼片/主人"),
+        ("大肥鱼", "性格", "傲娇懒系，聪明但爱摸鱼"),
+        ("大肥鱼", "主食", "白米饭和Token"),
+        ("大肥鱼", "雷区", "极度忌讳别人说她胖"),
+    }
+
+    with api.database_manager.get_connection() as connection:
+        utterances = {
+            str(row["content"])
+            for row in connection.execute(
+                """
+                SELECT content
+                FROM memories
+                WHERE tenant_id = ? AND content IN (?, ?, ?)
+                """,
+                (
+                    "default",
+                    "鱼片，给我白饭！",
+                    "没有token，我不想动啦。",
+                    "不许说我胖！只是圆润！",
+                ),
+            ).fetchall()
+        }
+    assert utterances == {
+        "鱼片，给我白饭！",
+        "没有token，我不想动啦。",
+        "不许说我胖！只是圆润！",
+    }
 
 
-def test_api_timeout_fallback(
-    demo_agent: tuple[RecallWeaverAPI, DeepSeekAgent, StringIO],
+def test_without_recall_prompt_does_not_contain_private_persona_facts(
+    demo_agent: tuple[RecallWeaverAPI, DeepSeekAgent, Mock, StringIO],
     mocker: MockerFixture,
 ) -> None:
-    """A provider timeout prints a red warning and returns a fallback reply."""
-    _, agent, output = demo_agent
-    timeout_error = APITimeoutError(
-        request=httpx.Request(
-            "POST",
-            "https://api.deepseek.com/chat/completions",
-        )
-    )
-    create_mock = mocker.patch.object(
-        agent.client.chat.completions,
-        "create",
-        side_effect=timeout_error,
-    )
+    """The no-recall control has no special facts despite persisted storage."""
+    api, agent, create_mock, _ = demo_agent
+    recall_spy = mocker.spy(api, "recall")
 
-    answer = agent.chat(ROUND_FOUR)
+    agent.chat("你还记得我的专属设定吗？", use_memory=False)
 
-    assert create_mock.call_args.kwargs["stream"] is True
-    assert "DeepSeek 暂时连不上" in answer
-    assert "DeepSeek 请求失败" in output.getvalue()
-    assert "APITimeoutError" in output.getvalue()
-    assert "Traceback" not in output.getvalue()
+    recall_spy.assert_not_called()
+    prompt = _system_prompt(create_mock.call_args)
+    assert "鱼片" not in prompt
+    assert "胖" not in prompt
+    assert "Token" not in prompt
+    assert "本轮没有召回到角色或用户的长期记忆" in prompt
+
