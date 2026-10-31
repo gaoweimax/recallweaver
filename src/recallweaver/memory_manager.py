@@ -15,6 +15,7 @@ from recallweaver.db import Database, db_manager
 from recallweaver.decay_engine import DecayEngine
 # 导入统一存储异常，让调用方无需直接依赖 SQLite 异常类型。
 from recallweaver.errors import DatabaseError, StorageError, ValidationError
+from recallweaver.observability.logging import get_logger
 
 
 class MemoryManager:
@@ -23,6 +24,7 @@ class MemoryManager:
     def __init__(self, database: Database | None = None) -> None:
         """初始化管理器；未指定时复用项目默认数据库管理器。"""
         self.db = database or db_manager
+        self.logger = get_logger(__name__)
 
     def remember(
         self,
@@ -269,6 +271,7 @@ class MemoryManager:
             timespec="microseconds"
         ).replace("+00:00", "Z")
         created_at = int(time.time())
+        expired_fact_count = 0
 
         try:
             with self.db.get_connection() as conn:
@@ -331,6 +334,19 @@ class MemoryManager:
                         return True
 
                     if current_edges:
+                        old_object_names: list[str] = []
+                        for edge in current_edges:
+                            old_object = conn.execute(
+                                """
+                                SELECT name
+                                FROM entities
+                                WHERE id = ? AND tenant_id = ?
+                                """,
+                                (edge["object_id"], tenant_id),
+                            ).fetchone()
+                            if old_object is not None:
+                                old_object_names.append(str(old_object["name"]))
+
                         latest_valid_from = max(
                             datetime.fromisoformat(
                                 str(edge["valid_from"]).replace(
@@ -350,7 +366,7 @@ class MemoryManager:
 
                         # 关闭所有同主体、同谓词的当前版本，避免历史脏重复留下
                         # 多条有效边；随后仅插入一个新的当前事实。
-                        conn.execute(
+                        update_cursor = conn.execute(
                             """
                             UPDATE edges
                             SET valid_to = ?
@@ -361,6 +377,8 @@ class MemoryManager:
                             """,
                             (now_ts, subject_id, predicate, tenant_id),
                         )
+                        expired_fact_count = update_cursor.rowcount
+                        expired_facts = "、".join(old_object_names)
 
                     conn.execute(
                         """
@@ -387,6 +405,24 @@ class MemoryManager:
                     ) from exc
         except StorageError:
             raise
+
+        if expired_fact_count:
+            self.logger.info(
+                "⚠️ 冲突！旧事实 %s 失效，新事实 %s 生效",
+                expired_facts,
+                object_,
+                extra={
+                    "action": "resolve_fact_conflict",
+                    "details": {
+                        "tenant_id": tenant_id,
+                        "subject": subject,
+                        "predicate": predicate,
+                        "old_facts": expired_facts,
+                        "new_fact": object_,
+                        "expired_fact_count": expired_fact_count,
+                    },
+                },
+            )
 
         return True
 

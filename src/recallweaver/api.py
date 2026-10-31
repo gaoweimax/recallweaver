@@ -22,7 +22,7 @@ from recallweaver.models import (
     TextMemoryIn,
     TripleIn,
 )
-from recallweaver.observability.logging import get_logger
+from recallweaver.observability.logging import get_logger, trace_context
 from recallweaver.observability.metrics import MetricsCollector
 from recallweaver.retrieval import Retriever
 
@@ -108,6 +108,21 @@ class RecallWeaverAPI:
     ) -> bool:
         """Insert a fact and record request count plus safe error events."""
         started_at = time.perf_counter()
+        self.logger.info(
+            "收到写入请求: %s-%s-%s",
+            subject,
+            predicate,
+            object_,
+            extra={
+                "action": "remember_triple",
+                "details": {
+                    "event": "收到写入请求",
+                    "subject": subject,
+                    "predicate": predicate,
+                    "object": object_,
+                },
+            },
+        )
         try:
             return self._remember_triple(
                 subject,
@@ -209,25 +224,58 @@ class RecallWeaverAPI:
         tenant_id: str = "default",
     ) -> list[MemoryOut]:
         """Recall memories while recording duration and safe error events."""
-        started_at = time.perf_counter()
-        try:
-            return self._recall(query, limit=limit, tenant_id=tenant_id)
-        except Exception as exc:
-            self.logger.error(
-                "recall failed: %s",
-                type(exc).__name__,
-                exc_info=True,
+        with trace_context() as trace_id:
+            started_at = time.perf_counter()
+            self.logger.info(
+                '🚀 收到检索 | query="%s"',
+                query,
+                extra={
+                    "action": "recall_start",
+                    "details": {"query": query},
+                },
             )
-            raise
-        finally:
-            duration_ms = (time.perf_counter() - started_at) * 1_000
-            self.metrics.record_recall(duration_ms)
+            try:
+                results = self._recall(
+                    query,
+                    limit=limit,
+                    tenant_id=tenant_id,
+                    trace_id=trace_id,
+                )
+                duration_ms = (time.perf_counter() - started_at) * 1_000
+                self.logger.info(
+                    "检索完成，耗时 %.3f ms，召回 %d 条记录",
+                    duration_ms,
+                    len(results),
+                    extra={
+                        "action": "recall_complete",
+                        "details": {
+                            "duration_ms": round(duration_ms, 3),
+                            "result_count": len(results),
+                        },
+                    },
+                )
+                return results
+            except Exception as exc:
+                self.logger.error(
+                    "recall failed: %s",
+                    type(exc).__name__,
+                    exc_info=True,
+                    extra={
+                        "action": "recall_error",
+                        "details": {"error_type": type(exc).__name__},
+                    },
+                )
+                raise
+            finally:
+                duration_ms = (time.perf_counter() - started_at) * 1_000
+                self.metrics.record_recall(duration_ms)
 
     def _recall(
         self,
         query: str,
         limit: int = 5,
         tenant_id: str = "default",
+        trace_id: str | None = None,
     ) -> list[MemoryOut]:
         """Merge text and graph recall, validate, deduplicate, and rank results.
 
@@ -289,6 +337,7 @@ class RecallWeaverAPI:
                         content=str(row["content"]),
                         tenant_id=request.tenant_id,
                         score=score,
+                        trace_id=trace_id,
                         valid_from=row["valid_from"],
                         valid_to=row["valid_to"],
                         created_at=int(row["created_at"]),
@@ -337,6 +386,7 @@ class RecallWeaverAPI:
                         relation=row.get("relation"),
                         depth=row.get("depth"),
                         tenant_id=request.tenant_id,
+                        trace_id=trace_id,
                         score=score,
                         valid_from=row.get("valid_from"),
                         created_at=created_at,

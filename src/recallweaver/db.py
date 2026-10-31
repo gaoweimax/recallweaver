@@ -10,8 +10,10 @@ from typing import TypeVar
 # 导入配置和异常
 from recallweaver.config import settings
 from recallweaver.errors import DatabaseError, StorageError
+from recallweaver.observability.logging import get_logger
 
 ResultT = TypeVar("ResultT")
+logger = get_logger(__name__)
 
 
 class Database:
@@ -137,6 +139,14 @@ class Database:
                 raise DatabaseError(f"数据库操作执行失败: {error}") from error
 
             self._record_retry()
+            logger.warning(
+                "🔄 触发退避重试，第 %d 次",
+                attempt + 1,
+                extra={
+                    "action": "database_retry",
+                    "details": {"retry_number": attempt + 1},
+                },
+            )
             delay_ceiling = min(
                 self.MAX_RETRY_DELAY_SECONDS,
                 self.MIN_RETRY_DELAY_SECONDS * (2**attempt),
@@ -149,12 +159,22 @@ class Database:
     def get_connection(self):
         """获取数据库连接的上下文管理器，自动提交或回滚"""
         conn = None
+        started_at = time.perf_counter()
         try:
             conn = sqlite3.connect(self.db_path, timeout=1.0)
             # 极度重要：开启 SQLite 的外键约束
             conn.execute("PRAGMA foreign_keys = ON;")
             # 让查询结果可以通过列名访问
             conn.row_factory = sqlite3.Row
+            elapsed_ms = (time.perf_counter() - started_at) * 1_000
+            logger.info(
+                "🔗 DB连接获取 (耗时 %.3f ms)",
+                elapsed_ms,
+                extra={
+                    "action": "database_connection_acquired",
+                    "details": {"duration_ms": round(elapsed_ms, 3)},
+                },
+            )
             yield conn
             conn.commit()
         except sqlite3.Error as e:
@@ -205,7 +225,13 @@ class Database:
                     )
             
             if verbose:
-                print(f"数据库初始化成功！位置: {self.db_path}")
+                logger.info(
+                    "数据库初始化成功",
+                    extra={
+                        "action": "database_initialized",
+                        "details": {"database_path": self.db_path},
+                    },
+                )
             
         except Exception as e:
             raise StorageError(f"建表失败: {str(e)}")
