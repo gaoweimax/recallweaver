@@ -1,8 +1,9 @@
-"""Network-free integration tests for the DeepSeek memory demo."""
+"""Network-free integration coverage for the DeepSeek memory demo."""
 
 from __future__ import annotations
 
 from io import StringIO
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -15,22 +16,24 @@ from rich.console import Console
 from examples.deepseek_agent import DeepSeekAgent
 from recallweaver.api import RecallWeaverAPI
 
-FIRST_TURN = "我以前住在北京，最近搬到了杭州，而且我对花生过敏。"
+ROUND_FOUR = (
+    "我到底能不能吃花生？我以前是住哪来着，最近搬家累死了。"
+)
 
 
 @pytest.fixture
 def demo_agent(
-    tmp_path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[RecallWeaverAPI, DeepSeekAgent, StringIO]:
-    """Create an isolated agent with a dummy key and capturable Rich output.
+    """Create an isolated agent with a local database and captured output.
 
     Args:
-        tmp_path: Pytest's per-test temporary directory.
-        monkeypatch: Fixture for temporary environment configuration.
+        tmp_path: Per-test directory managed by pytest.
+        monkeypatch: Fixture used to provide a non-secret test API key.
 
     Returns:
-        API, agent, and output stream for one isolated integration test.
+        A database API, configured demo agent, and Rich output buffer.
     """
     monkeypatch.setenv("DEEPSEEK_API_KEY", "unit-test-key")
     output = StringIO()
@@ -41,40 +44,38 @@ def demo_agent(
 
 
 def _mock_stream(text: str = "测试回复") -> list[Any]:
-    """Create OpenAI-compatible streaming chunks without network access.
+    """Build OpenAI-compatible streaming chunks without network access.
 
     Args:
-        text: Text to expose in the mocked delta.
+        text: Content returned by the mocked model.
 
     Returns:
-        A one-item iterable compatible with the agent's stream parser.
+        A list with the shape consumed by ``DeepSeekAgent``.
     """
     return [
         SimpleNamespace(
             choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(content=text),
-                )
+                SimpleNamespace(delta=SimpleNamespace(content=text))
             ]
         )
     ]
 
 
-def _intercept_streaming_request(
+def _mock_provider(
     agent: DeepSeekAgent,
     mocker: MockerFixture,
     *,
     text: str = "测试回复",
 ) -> Any:
-    """Replace the OpenAI SDK call with a local streaming mock.
+    """Replace the provider call with an inspectable local mock.
 
     Args:
-        agent: Agent whose provider client must not access the network.
+        agent: Agent whose SDK request must be intercepted.
         mocker: pytest-mock fixture.
-        text: Mocked streamed answer.
+        text: Mocked completion content.
 
     Returns:
-        The mock object for inspecting prompt arguments.
+        Mock for validating the request and its prompt.
     """
     return mocker.patch.object(
         agent.client.chat.completions,
@@ -83,15 +84,46 @@ def _intercept_streaming_request(
     )
 
 
-def test_first_turn_closes_previous_city_and_keeps_new_city_current(
+def _seed_time_and_allergy_facts(api: RecallWeaverAPI) -> None:
+    """Create the historical facts needed to exercise turn-four prompting."""
+    api.remember_triple("我", "住在", "北京")
+    api.remember_triple("我", "住在", "杭州")
+    api.remember_triple("我", "过敏", "花生")
+
+
+def test_persona_and_fact_injection(
     demo_agent: tuple[RecallWeaverAPI, DeepSeekAgent, StringIO],
     mocker: MockerFixture,
 ) -> None:
-    """Moving from Beijing to Hangzhou creates a closed/open fact pair."""
+    """Turn four sends persona, allergy, and both city versions to DeepSeek."""
     api, agent, _ = demo_agent
-    _intercept_streaming_request(agent, mocker)
+    _seed_time_and_allergy_facts(api)
+    create_mock = _mock_provider(agent, mocker)
 
-    agent.chat(FIRST_TURN)
+    agent.chat(ROUND_FOUR)
+
+    kwargs = create_mock.call_args.kwargs
+    assert kwargs["stream"] is True
+    prompt = next(
+        str(message["content"])
+        for message in kwargs["messages"]
+        if message["role"] == "system"
+    )
+    assert "毒舌" in prompt
+    assert "花生" in prompt
+    assert "北京(已失效)" in prompt
+    assert "杭州" in prompt
+
+
+def test_conflict_timestamp(
+    demo_agent: tuple[RecallWeaverAPI, DeepSeekAgent, StringIO],
+    mocker: MockerFixture,
+) -> None:
+    """Explicitly moving from Beijing to Hangzhou closes only the old edge."""
+    api, agent, _ = demo_agent
+    _mock_provider(agent, mocker)
+
+    agent.chat("我以前住在北京，最近搬到了杭州。")
 
     with api.database_manager.get_connection() as connection:
         rows = connection.execute(
@@ -113,39 +145,16 @@ def test_first_turn_closes_previous_city_and_keeps_new_city_current(
         ).fetchall()
 
     validity = {str(row["city"]): row["valid_to"] for row in rows}
+    assert set(validity) == {"北京", "杭州"}
     assert validity["北京"] is not None
     assert validity["杭州"] is None
 
 
-def test_system_prompt_contains_allergy_current_city_and_expired_city(
+def test_api_timeout_fallback(
     demo_agent: tuple[RecallWeaverAPI, DeepSeekAgent, StringIO],
     mocker: MockerFixture,
 ) -> None:
-    """The actual system prompt includes current and historical graph facts."""
-    _, agent, output = demo_agent
-    create_mock = _intercept_streaming_request(agent, mocker)
-
-    agent.chat(FIRST_TURN)
-
-    request_kwargs = create_mock.call_args.kwargs
-    assert request_kwargs["stream"] is True
-    prompt_messages = request_kwargs["messages"]
-    system_prompt = next(
-        str(message["content"])
-        for message in prompt_messages
-        if message["role"] == "system"
-    )
-    assert "花生" in system_prompt
-    assert "杭州" in system_prompt
-    assert "北京(已失效)" in system_prompt
-    assert "System Prompt" in output.getvalue()
-
-
-def test_api_timeout_returns_rich_fallback_without_traceback(
-    demo_agent: tuple[RecallWeaverAPI, DeepSeekAgent, StringIO],
-    mocker: MockerFixture,
-) -> None:
-    """A provider timeout is shown as a Rich panel and returned gracefully."""
+    """A provider timeout prints a red warning and returns a fallback reply."""
     _, agent, output = demo_agent
     timeout_error = APITimeoutError(
         request=httpx.Request(
@@ -159,10 +168,10 @@ def test_api_timeout_returns_rich_fallback_without_traceback(
         side_effect=timeout_error,
     )
 
-    answer = agent.chat(FIRST_TURN)
+    answer = agent.chat(ROUND_FOUR)
 
     assert create_mock.call_args.kwargs["stream"] is True
-    assert "DeepSeek 暂时不可用" in answer
-    assert "服务暂不可用" in output.getvalue()
+    assert "DeepSeek 暂时连不上" in answer
+    assert "DeepSeek 请求失败" in output.getvalue()
     assert "APITimeoutError" in output.getvalue()
     assert "Traceback" not in output.getvalue()
