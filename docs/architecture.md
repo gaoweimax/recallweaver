@@ -5,25 +5,20 @@
 RecallWeaver 是嵌入 Python 应用的本地记忆组件。API、业务逻辑、图关系、全文索引和数据存储运行在同一进程与 SQLite 数据库中，无需常驻数据库服务。`RecallWeaverAPI` 为主要对外门面；LLM 抽取器是可选组件，调用方可在写入前使用它把自然语言转换为三元组。
 
 ```mermaid
-flowchart TB
-    U[调用方 / Agent] --> API[RecallWeaverAPI]
-    API --> EX[可选：LLMExtractor]
-    EX --> MM[MemoryManager]
-    API --> MM
-    MM --> GRAPH[GraphManager / edges]
-    MM --> DB[Database 事务]
-    GRAPH --> DB
-    DB --> SQLITE[(SQLite)]
-    SQLITE --> FTS[memories_fts / FTS5]
-    API --> RET[Retriever]
-    RET --> FTS
-    RET --> DECAY[DecayEngine]
-    API --> GRAPH
-    GRAPH --> API
-    DECAY --> API
-    API --> U
+flowchart LR
+    USER[Agent / 调用方] --> API[RecallWeaverAPI]
+    API -. 可选抽取由应用编排 .-> EX[LLMExtractor]
+    EX -->|校验后的三元组| API
+    API -->|add_memory / remember_triple| MM[MemoryManager]
+    MM -->|事务写入| DB[(SQLite)]
+    DB -->|事实与记忆候选| RET[Retriever]
+    RET -->|评分、阈值过滤与排序| API
+    API -->|MemoryOut| USER
+    DB --> FTS[memories_fts / FTS5]
     CFG[Settings / 环境变量] -. 数据库路径和运行配置 .-> API
 ```
+
+`LLMExtractor` 是可选组件，当前不会由 `RecallWeaverAPI` 自动调用；Agent 应用可在 API 边界协调抽取和三元组写入。图中的 SQLite 到 Retriever 表示检索器从持久层读取候选，实际 Retriever 依赖 `Database` 连接读取 FTS5/记忆表。
 
 ## 2. 分层结构
 

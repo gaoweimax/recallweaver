@@ -1,6 +1,6 @@
 # RecallWeaver 数据字典
 
-本文档对应 `schema.sql` 与 `src/recallweaver/migrations/0001_init.sql` 中的 SQLite 结构。SQLite 使用动态类型系统；下表中的类型是 schema 声明类型。标注“可空”表示 schema 未声明 `NOT NULL`，即使业务代码通常会提供值。
+本文档对应 `schema.sql` 与 `src/recallweaver/migrations/0001_init.sql` 中的 SQLite 结构，逐项说明 9 张核心表及 FTS5 辅助对象。SQLite 使用动态类型系统；下表中的类型是 schema 声明类型。标注“可空”表示 schema 未声明 `NOT NULL`，即使业务代码通常会提供值。
 
 ## 1. 通用约定
 

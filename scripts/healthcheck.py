@@ -3,7 +3,9 @@
 import argparse
 import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
+from typing import Final
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -12,7 +14,21 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from recallweaver.config import settings
 
-CORE_TABLES = ("memories", "entities", "edges")
+CORE_TABLES: Final[tuple[str, ...]] = ("memories", "entities", "edges")
+GREEN: Final[str] = "\033[32m"
+RED: Final[str] = "\033[31m"
+RESET: Final[str] = "\033[0m"
+
+
+def _report(message: str, *, healthy: bool) -> None:
+    """Print a health-check line in green or red.
+
+    Args:
+        message: Human-readable status or failure detail.
+        healthy: Whether the line represents a passing health check.
+    """
+    color = GREEN if healthy else RED
+    print(f"{color}{message}{RESET}")
 
 
 def check_database(db_path: Path) -> bool:
@@ -27,24 +43,37 @@ def check_database(db_path: Path) -> bool:
     print("🩺 RecallWeaver 数据库健康检查")
     print(f"📍 数据库：{db_path}")
 
-    if not db_path.is_file():
-        print("❌ 数据库文件不存在")
+    try:
+        if not db_path.is_file():
+            _report(f"数据库文件不存在：{db_path}", healthy=False)
+            return False
+    except OSError as exc:
+        _report(f"无法检查数据库文件：{exc}", healthy=False)
         return False
 
     try:
-        with sqlite3.connect(db_path) as connection:
+        with closing(sqlite3.connect(db_path, timeout=5.0)) as connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+            foreign_keys_enabled = connection.execute(
+                "PRAGMA foreign_keys"
+            ).fetchone()
+            if foreign_keys_enabled is None or foreign_keys_enabled[0] != 1:
+                _report("SQLite 外键约束未启用", healthy=False)
+                return False
+            _report("SQLite 外键约束已启用", healthy=True)
+
             integrity = connection.execute("PRAGMA quick_check").fetchone()
             if integrity is None or integrity[0] != "ok":
-                print(f"❌ SQLite 完整性检查失败：{integrity}")
+                _report(f"SQLite 完整性检查失败：{integrity}", healthy=False)
                 return False
-            print("✅ SQLite 可连接且完整性检查通过")
+            _report("SQLite 可连接且完整性检查通过", healthy=True)
 
             existing_tables = {
                 row[0]
                 for row in connection.execute(
                     """
                     SELECT name FROM sqlite_master
-                    WHERE type IN ('table', 'view')
+                    WHERE type = 'table'
                     """
                 )
             }
@@ -52,9 +81,9 @@ def check_database(db_path: Path) -> bool:
                 table for table in CORE_TABLES if table not in existing_tables
             ]
             if missing_tables:
-                print(f"❌ 缺少核心表：{', '.join(missing_tables)}")
+                _report(f"缺少核心表：{', '.join(missing_tables)}", healthy=False)
                 return False
-            print(f"✅ 核心表已创建：{', '.join(CORE_TABLES)}")
+            _report(f"核心表已创建：{', '.join(CORE_TABLES)}", healthy=True)
 
             if "schema_migrations" in existing_tables:
                 version = connection.execute(
@@ -63,11 +92,11 @@ def check_database(db_path: Path) -> bool:
                 print(f"ℹ️ 已应用的最高迁移版本：{version}")
             else:
                 print("ℹ️ 未发现 schema_migrations，核心表检查仍已通过")
-    except sqlite3.Error as exc:
-        print(f"❌ 数据库检查失败：{exc}")
+    except (OSError, sqlite3.Error) as exc:
+        _report(f"数据库检查失败：{exc}", healthy=False)
         return False
 
-    print("✅ 健康检查通过")
+    _report("健康检查通过", healthy=True)
     return True
 
 
