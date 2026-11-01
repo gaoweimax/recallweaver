@@ -34,30 +34,13 @@ python -m pip install recallweaver==1.2.2
 
 如果电脑装了多个 Python，请确认 DSH 插件之后会使用的那个 Python 也装好了 RecallWeaver。稍后可以在配置里填写该 Python 的完整路径。
 
-### 第一步：把插件文件夹放进 DSH 的插件目录
+### 第一步：安装 DSH 插件
 
-把仓库里的整个 `dsh-plugin-recallweaver` 文件夹复制到 DSH 使用的插件目录。若你的 DSH 使用 `~/.dsh/plugins/`，目标位置应为：
+Windows 用户可以直接右键运行 `scripts/install_dsh_plugin.ps1` 实现一键安装。
 
-```text
-~/.dsh/plugins/dsh-plugin-recallweaver/
-```
+脚本会优先查找 DSH 默认安装位置中的 `dsh.cmd`，找不到时会请你输入 DSH 安装目录或 `dsh.cmd` 的完整路径，然后使用插件文件夹的绝对路径执行安装。安装完成后，请彻底退出 DSH 托盘程序，再重新打开以生效。
 
-Windows 上 `~` 通常代表你的用户目录，例如：
-
-```text
-C:\Users\你的用户名\.dsh\plugins\dsh-plugin-recallweaver\
-```
-
-不同 DSH 安装方式可能使用不同的插件目录；如果 DSH 指定了其他目录，就放到它实际加载的目录里。复制时保留整个文件夹，尤其不要漏掉 `cli-bridge.py`：
-
-```text
-dsh-plugin-recallweaver/
-├── package.json
-├── index.js
-├── cli-bridge.py
-├── cordis.patch.yml
-└── README.md
-```
+如果你使用非 Windows 系统，请通过 DSH 支持的插件管理方式安装仓库中的 `dsh-plugin-recallweaver` 文件夹。
 
 ### 第二步：在 DSH 配置里开启插件
 
