@@ -41,8 +41,9 @@ def main() -> int:
     else:
         console.print(
             "[bold red]警告：未设置 DEEPSEEK_API_KEY；"
-            "记忆 API 仍可使用，但 DeepSeek 聊天接口不可用。[/bold red]"
+            "请配置密钥后重新启动服务。[/bold red]"
         )
+        sys.exit(1)
 
     local_ip = _local_ip_address()
     print(f"RecallWeaver API: http://{local_ip}:{PORT}")

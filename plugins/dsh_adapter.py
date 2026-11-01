@@ -81,3 +81,7 @@ class DSHMemoryAdapter:
             f"{memory_context}\n"
             "请结合上述记忆回答用户；若无相关记忆，请直接回答。"
         )
+
+    def on_message(self, user_id: str, message: str) -> str:
+        """提供 DSH 常见事件入口名称，返回与 process_message 相同的提示词。"""
+        return self.process_message(user_id, message)
