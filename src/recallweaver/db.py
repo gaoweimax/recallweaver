@@ -2,6 +2,7 @@ import sqlite3
 import random
 import threading
 import time
+from importlib import resources
 from pathlib import Path
 from contextlib import contextmanager
 from collections.abc import Callable
@@ -16,14 +17,33 @@ ResultT = TypeVar("ResultT")
 logger = get_logger(__name__)
 
 
+def _read_schema_sql() -> str:
+    """Read the schema from the installed package, with a source-tree fallback."""
+    try:
+        return (
+            resources.files("recallweaver")
+            .joinpath("schema.sql")
+            .read_text(encoding="utf-8")
+        )
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        schema_path = Path(__file__).resolve().parents[2] / "schema.sql"
+        try:
+            return schema_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise StorageError(
+                f"无法从安装包或项目目录读取 schema.sql（备用路径：{schema_path}）：{exc}"
+            ) from exc
+
+
 class Database:
     """
     数据库核心管理类。
     负责连接 SQLite、开启外键约束、执行建表脚本。
     """
-    MAX_TRANSACTION_RETRIES = 5
+    MAX_TRANSACTION_RETRIES = 15
     MIN_RETRY_DELAY_SECONDS = 0.01
-    MAX_RETRY_DELAY_SECONDS = 0.1
+    MAX_RETRY_DELAY_SECONDS = 1.0
+    SQLITE_BUSY_TIMEOUT_MS = 10_000
 
     def __init__(self, db_path: str | None = None):
         # 如果没传路径，就使用 config.py 里的默认路径
@@ -149,11 +169,9 @@ class Database:
             )
             delay_ceiling = min(
                 self.MAX_RETRY_DELAY_SECONDS,
-                self.MIN_RETRY_DELAY_SECONDS * (2**attempt),
+                0.1 * (2**attempt),
             )
-            time.sleep(
-                random.uniform(self.MIN_RETRY_DELAY_SECONDS, delay_ceiling)
-            )
+            time.sleep(random.uniform(self.MIN_RETRY_DELAY_SECONDS, delay_ceiling))
 
     @contextmanager
     def get_connection(self):
@@ -161,7 +179,13 @@ class Database:
         conn = None
         started_at = time.perf_counter()
         try:
-            conn = sqlite3.connect(self.db_path, timeout=1.0)
+            conn = sqlite3.connect(
+                self.db_path,
+                timeout=self.SQLITE_BUSY_TIMEOUT_MS / 1_000,
+            )
+            conn.execute(
+                f"PRAGMA busy_timeout = {self.SQLITE_BUSY_TIMEOUT_MS};"
+            )
             # 极度重要：开启 SQLite 的外键约束
             conn.execute("PRAGMA foreign_keys = ON;")
             # 让查询结果可以通过列名访问
@@ -192,15 +216,8 @@ class Database:
 
     def init_db(self, verbose: bool = True):
         """读取 schema.sql 并初始化数据库"""
-        # 定位到项目根目录的 schema.sql
-        schema_path = Path(__file__).parent.parent.parent / "schema.sql"
-        
-        if not schema_path.exists():
-            raise StorageError(f"找不到建表图纸: {schema_path}")
-
         try:
-            with open(schema_path, 'r', encoding='utf-8') as f:
-                schema_sql = f.read()
+            schema_sql = _read_schema_sql()
 
             with self.get_connection() as conn:
                 fts_definition = conn.execute(
