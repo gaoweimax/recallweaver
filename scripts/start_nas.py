@@ -6,9 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from rich.console import Console
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 HOST = "0.0.0.0"
 PORT = 8000
+console = Console()
 
 
 def _local_ip_address() -> str:
@@ -36,9 +39,9 @@ def main() -> int:
     if os.environ.get("DEEPSEEK_API_KEY", "").strip():
         print("已检测到 DEEPSEEK_API_KEY。")
     else:
-        print(
-            "提示：未设置 DEEPSEEK_API_KEY；记忆 API 仍可使用，"
-            "但 DeepSeek 聊天接口不可用。"
+        console.print(
+            "[bold red]警告：未设置 DEEPSEEK_API_KEY；"
+            "记忆 API 仍可使用，但 DeepSeek 聊天接口不可用。[/bold red]"
         )
 
     local_ip = _local_ip_address()
