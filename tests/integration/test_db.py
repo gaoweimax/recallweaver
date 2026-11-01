@@ -59,7 +59,7 @@ def test_execute_with_retry_replays_operation_after_locked_error(
     assert database.retry_attempts == 2
 
 
-def test_execute_with_retry_fails_after_five_retries(
+def test_execute_with_retry_fails_after_fifteen_retries(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -74,8 +74,18 @@ def test_execute_with_retry_fails_after_five_retries(
 
     monkeypatch.setattr("recallweaver.db.time.sleep", lambda _: None)
 
-    with pytest.raises(DatabaseError, match="5 次重试均已耗尽"):
+    with pytest.raises(DatabaseError, match="15 次重试均已耗尽"):
         database.execute_with_retry(operation)
 
-    assert attempts == 6
-    assert database.retry_attempts == 5
+    assert attempts == 16
+    assert database.retry_attempts == 15
+
+
+def test_connection_sets_sqlite_busy_timeout(tmp_path) -> None:
+    """Every managed SQLite connection waits up to ten seconds on a busy lock."""
+    database = Database(str(tmp_path / "busy-timeout.db"))
+
+    with database.get_connection() as connection:
+        busy_timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
+
+    assert busy_timeout == 10_000

@@ -1,0 +1,43 @@
+{
+  "name": "recallweaver-memory",
+  "version": "1.2.2",
+  "description": "RecallWeaver memory retrieval for DeepSeek Harness",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cli-bridge.py",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "install:python": "python -m pip install recallweaver==1.2.2"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "recallweaver",
+    "memory"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dsh": {
+    "entry": "./index.js",
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "pythonDependencies": {
+      "recallweaver": "==1.2.2"
+    }
+  }
+}

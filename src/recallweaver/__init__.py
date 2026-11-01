@@ -13,7 +13,7 @@ from .errors import DatabaseError, ValidationError
 from .db import Database, db_manager
 from .api import RecallWeaverAPI
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 # 显式声明包的公共接口，避免内部实现细节被误认为稳定的公开 API。
 __all__ = [

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "recallweaver"
-version = "1.2.1"
+version = "1.2.2"
 description = "A lightweight local memory engine for AI agents"
 readme = "README.md"
 requires-python = "==3.11.9"
@@ -29,6 +29,7 @@ packages = ["src/recallweaver"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "plugins/dsh_adapter.py" = "plugins/dsh_adapter.py"
+"schema.sql" = "recallweaver/schema.sql"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
