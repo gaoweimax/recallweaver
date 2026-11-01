@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from rich.console import Console
 
 from recallweaver.api import RecallWeaverAPI
 from recallweaver.errors import DatabaseError, ValidationError
@@ -20,6 +21,7 @@ from recallweaver.models import MemoryOut
 from recallweaver.observability.logging import get_logger, get_trace_id
 
 logger = get_logger(__name__)
+console = Console()
 
 _ALLERGY_PATTERN = re.compile(
     r"(?:我|本人)?对(?P<item>[^，。！？,.!?;；\s]+)过敏"
@@ -102,6 +104,15 @@ class MemorySearchResponse(BaseModel):
 
     trace_id: str
     results: list[MemoryOut]
+
+
+class MemoryExplainItem(BaseModel):
+    """One recalled fact together with the reason it matched."""
+
+    content: str
+    score: float
+    valid_to: str | int | None
+    hit_reason: str
 
 
 def _extract_explicit_facts(message: str) -> list[tuple[str, str]]:
@@ -447,6 +458,61 @@ def create_app(
             request.user_id,
         )
         return MemoryAddResponse(memory_id=memory_id)
+
+    @application.get(
+        "/api/v1/memory/explain",
+        response_model=list[MemoryExplainItem],
+    )
+    async def explain_memory_recall(
+        http_request: Request,
+        query: Annotated[str, Query(min_length=1, max_length=10_000)],
+        user_id: Annotated[str, Query(min_length=1, max_length=128)] = "default",
+        limit: Annotated[int, Query(ge=1, le=100)] = 10,
+    ) -> list[MemoryExplainItem]:
+        """Show which recalled facts matched and the retrieval path involved."""
+        normalized_query = query.strip()
+        if not normalized_query:
+            raise HTTPException(status_code=422, detail="query must not be blank")
+
+        console.print(
+            "[bold cyan]Explain API 用于查看“为什么召回”。[/bold cyan]"
+        )
+        memory_api: RecallWeaverAPI = http_request.app.state.recallweaver_api
+        recalled = await asyncio.to_thread(
+            memory_api.recall,
+            normalized_query,
+            limit,
+            user_id,
+        )
+
+        explanations: list[MemoryExplainItem] = []
+        for memory in recalled:
+            if memory.content:
+                content = memory.content
+                hit_reason = "文本记忆命中（FTS5 全文检索或 LIKE 子串回退）"
+            else:
+                parts = (
+                    memory.subject or memory.start_name,
+                    memory.predicate or memory.relation,
+                    memory.object or memory.entity_name,
+                )
+                content = " ".join(part for part in parts if part)
+                depth = memory.depth or 1
+                hit_reason = (
+                    f"图谱多跳命中（{depth} 跳）"
+                    if depth > 1
+                    else "图谱单跳命中"
+                )
+
+            explanations.append(
+                MemoryExplainItem(
+                    content=content,
+                    score=memory.score,
+                    valid_to=memory.valid_to,
+                    hit_reason=hit_reason,
+                )
+            )
+        return explanations
 
     return application
 

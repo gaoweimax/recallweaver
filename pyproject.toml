@@ -1,11 +1,12 @@
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
 
 [project]
 name = "recallweaver"
-version = "0.1.0"
+version = "1.2.0"
 description = "A lightweight local memory engine for AI agents"
+readme = "README.md"
 requires-python = "==3.11.9"
 dependencies = [
     "click>=8.1",
@@ -23,8 +24,8 @@ test = ["httpx>=0.27", "pytest>=8.0", "pytest-mock>=3.14"]
 [project.scripts]
 rw = "recallweaver.cli:cli"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/recallweaver"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
