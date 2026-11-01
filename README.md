@@ -2,7 +2,7 @@
 
 你的大肥鱼是不是一开新会话，就忘了你住哪、喜欢什么？
 
-`dsh-plugin-recallweaver` 是给 DSH 桌宠用的记忆外挂。它会在大肥鱼回答前，从你电脑里的记忆库找出相关信息，放进这次对话的提示词里。这样即使新开会话，大肥鱼也有机会接上之前的话题。
+本项目包含两个部分：底层 Python 库（当前仓库）和 DSH Node.js 插件（独立仓库）。DSH 插件会在大肥鱼回答前，从你电脑里的记忆库找出相关信息，放进这次对话的提示词里。这样即使新开会话，大肥鱼也有机会接上之前的话题。
 
 ## 🎬 极客演示 (Demo)
 
@@ -34,51 +34,19 @@ python -m pip install recallweaver==1.2.2
 
 如果电脑装了多个 Python，请确认 DSH 插件之后会使用的那个 Python 也装好了 RecallWeaver。稍后可以在配置里填写该 Python 的完整路径。
 
-### 第一步：安装 DSH 插件
+### 第一步：从独立仓库安装 DSH 插件
 
-在项目根目录运行下面的命令，将插件复制到当前用户的 DSH 插件目录：
+请前往独立插件仓库获取最新安装包：https://github.com/gaoweimax/dsh-plugin-recallweaver
+
+在终端运行下面的命令，一键将插件添加到 DSH 的 `desktop` profile：
 
 ```shell
-python scripts/install_plugin.py
+dsh plugin --profile desktop add https://github.com/gaoweimax/dsh-plugin-recallweaver
 ```
 
-脚本会把整个插件文件夹复制到 `~/.dsh/plugins/`。复制完成后，请彻底退出 DSH 托盘程序，再重新打开以生效。接着还需要按下一步说明，把插件配置加入当前 DSH profile 的 `cordis.patch.yml`。
+请按独立插件仓库中的说明准备依赖和完成配置。安装完成后，彻底退出 DSH（包括托盘程序）再重新打开，使插件生效。
 
-### 第二步：在 DSH 配置里开启插件
-
-找到当前 DSH 正在使用的 profile 配置文件 `cordis.patch.yml`。把下面配置加进去：
-
-```yaml
-- insert:
-    - id: recallweaver-memory
-      name: recallweaver-memory
-      inject: [systemPrompt]
-      config:
-        python: python
-        timeoutMs: 10000
-```
-
-如果文件里已经有 `- insert:`，把 `recallweaver-memory` 这一项放进现有列表，不要再重复新建一组顶层 `- insert:`。
-
-如果 DSH 找不到 Python，把 `python: python` 换成 Python 可执行文件的完整路径。例如：
-
-```yaml
-        python: 'C:\Python311\python.exe'
-```
-
-如果你要指定记忆库位置，可以在 `config:` 下面增加 `dbPath`。写入记忆和插件检索必须使用同一个数据库文件：
-
-```yaml
-        dbPath: 'C:\data\recallweaver.db'
-```
-
-> **注意找对文件：**这里修改的是 DSH 当前 profile 里的 `cordis.patch.yml`，不是插件文件夹自带的同名示例文件。DSH 如果找不到插件或没有变化，优先确认 profile 和插件目录是否是当前实例实际使用的路径。
-
-### 第三步：彻底退出并重新打开 DSH
-
-保存配置后，彻底退出 DSH 再重新打开，让它重新加载插件。若 DSH 还在系统托盘或后台运行，也要按正常退出方式关闭后台进程。只关掉聊天窗口或新开一个会话，通常不会重新加载插件配置。
-
-### 第四步：写一条记忆，再开新会话测试
+### 第二步：写一条记忆，再开新会话测试
 
 插件现在只会查找已有记忆，不会自动保存你在聊天里说的话。先在终端运行下面的命令，手动写入一条测试记忆：
 
@@ -112,8 +80,8 @@ python -m recallweaver.cli recall "鱼片住在哪里"
 | 现象 | 先检查这里 |
 |---|---|
 | 安装时报 Python 版本不兼容 | 当前 `recallweaver==1.2.2` 要求 Python `3.11.9`。 |
-| DSH 说找不到 Python 或 RecallWeaver | 配置 `python` 为安装过 RecallWeaver 的 Python 完整路径，并用同一个 Python 执行安装命令。 |
-| 插件没有加载 | 检查插件文件夹是否放在 DSH 实际使用的插件目录，并确认修改的是当前 profile 的 `cordis.patch.yml`。 |
+| DSH 说找不到 Python 或 RecallWeaver | 按独立插件仓库的说明检查 Python 路径和依赖安装。 |
+| 插件没有加载 | 确认安装命令成功，并按独立插件仓库说明完成 profile 配置；然后彻底退出并重启 DSH。 |
 | 大肥鱼还是不知道答案 | 先运行 `python -m recallweaver.cli recall "你的问题"`。若命令都找不到，检查记忆内容和数据库路径；若命令能找到，查看 DSH 插件日志。 |
 | 聊天里说了“记住我住杭州”，新会话却忘了 | 当前插件不会自动保存聊天。先通过 CLI 或 Python API 把信息写进记忆库。 |
 | 改完配置没变化 | 完全退出 DSH（包括托盘或后台进程）后再打开。 |
@@ -155,7 +123,7 @@ for result in results:
 
 ## 项目与更多说明
 
-- DSH 插件目录：[dsh-plugin-recallweaver/](dsh-plugin-recallweaver/)
+- DSH Node.js 插件独立仓库：[gaoweimax/dsh-plugin-recallweaver](https://github.com/gaoweimax/dsh-plugin-recallweaver)
 - DSH 桌宠接入补充说明：[docs/DSH 桌宠接入指南.md](docs/DSH%20%E6%A1%8C%E5%AE%A0%E6%8E%A5%E5%85%A5%E6%8C%87%E5%8D%97.md)
 - 技术设计说明：[docs/architecture.md](docs/architecture.md)
 
