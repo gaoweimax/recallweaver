@@ -36,11 +36,13 @@ python -m pip install recallweaver==1.2.2
 
 ### 第一步：安装 DSH 插件
 
-Windows 用户可以直接右键运行 `scripts/install_dsh_plugin.ps1` 实现一键安装。
+在项目根目录运行下面的命令，将插件复制到当前用户的 DSH 插件目录：
 
-脚本会优先查找 DSH 默认安装位置中的 `dsh.cmd`，找不到时会请你输入 DSH 安装目录或 `dsh.cmd` 的完整路径，然后使用插件文件夹的绝对路径执行安装。安装完成后，请彻底退出 DSH 托盘程序，再重新打开以生效。
+```shell
+python scripts/install_plugin.py
+```
 
-如果你使用非 Windows 系统，请通过 DSH 支持的插件管理方式安装仓库中的 `dsh-plugin-recallweaver` 文件夹。
+脚本会把整个插件文件夹复制到 `~/.dsh/plugins/`。复制完成后，请彻底退出 DSH 托盘程序，再重新打开以生效。接着还需要按下一步说明，把插件配置加入当前 DSH profile 的 `cordis.patch.yml`。
 
 ### 第二步：在 DSH 配置里开启插件
 
