@@ -1,7 +1,0 @@
-- insert:
-    - id: recallweaver-memory
-      name: recallweaver-memory
-      inject: [systemPrompt]
-      config:
-        python: python
-        timeoutMs: 10000

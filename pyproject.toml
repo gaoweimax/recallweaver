@@ -28,7 +28,6 @@ rw = "recallweaver.cli:cli"
 packages = ["src/recallweaver"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"plugins/dsh_adapter.py" = "plugins/dsh_adapter.py"
 "schema.sql" = "recallweaver/schema.sql"
 
 [tool.pytest.ini_options]

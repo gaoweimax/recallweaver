@@ -1,8 +1,0 @@
-# 将 RecallWeaver 作为系统提示词提供方插入 DSH 的 Cordis 插件链。
-- insert:
-    - id: recallweaver-memory
-      name: recallweaver-dsh
-      inject: [systemPrompt]
-      config:
-        python: python
-        timeoutMs: 10000

@@ -17,7 +17,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
-from recallweaver.api import RecallWeaverAPI
+from recallweaver import RecallWeaverAPI
 from recallweaver.models import MemoryOut
 
 PERSONA_TRIPLES: tuple[tuple[str, str, str], ...] = (

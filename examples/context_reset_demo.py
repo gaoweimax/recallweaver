@@ -22,7 +22,7 @@ from rich.table import Table
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from recallweaver.api import RecallWeaverAPI
+from recallweaver import RecallWeaverAPI
 from recallweaver.models import MemoryOut
 
 _QUESTION = "你还记得我是谁吗？我该注意什么？"
@@ -121,7 +121,7 @@ def _render_comparison(
     table.add_column("本轮发送的记忆", style="cyan")
     table.add_column("模型表现", style="green")
     table.add_row(
-        "A · 无插件裸跑",
+        "A · 不提供长期记忆",
         "无历史消息、无记忆 System Prompt",
         "失忆",
     )
@@ -134,7 +134,7 @@ def _render_comparison(
     console.print(
         Panel(
             bare_reply,
-            title="场景 A · Chat History 已清空（无插件）",
+            title="场景 A · Chat History 已清空（未提供长期记忆）",
             border_style="red",
         )
     )
