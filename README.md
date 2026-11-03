@@ -14,11 +14,11 @@ RecallWeaver 帮助 AI 应用把重要信息保存在本机，并在需要时重
 
 ### 环境与安装
 
-当前发行版 `recallweaver==1.2.2` 要求 **Python 3.11.9**：
+当前发行版 `recallweaver==1.2.3` 要求 **Python 3.11.9**：
 
 ```shell
 python --version
-python -m pip install recallweaver==1.2.2
+python -m pip install recallweaver==1.2.3
 ```
 
 ### Python API：保存并检索记忆
@@ -95,3 +95,9 @@ recallweaver/
 ## 数据与许可
 
 记忆默认保存在本地 SQLite 文件中。数据库文件不会自动加密或备份，请自行妥善保管并定期备份。
+
+## 🗺️ Roadmap (未来路线图)
+
+- 支持 sqlite-vec 语义向量检索。
+- 支持多模态记忆（语音/图片）。
+- 提供跨数据库迁移工具。

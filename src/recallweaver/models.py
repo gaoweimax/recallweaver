@@ -22,9 +22,9 @@ class _NonEmptyInput(BaseModel):
 class TripleIn(_NonEmptyInput):
     """需要写入图谱的主语、谓词、宾语及租户。"""
 
-    subject: str
-    predicate: str
-    object_: str
+    subject: str = Field(max_length=10_000)
+    predicate: str = Field(max_length=10_000)
+    object_: str = Field(max_length=10_000)
     tenant_id: str = "default"
 
 

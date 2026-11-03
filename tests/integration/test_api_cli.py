@@ -79,9 +79,51 @@ def test_cli_execution(tmp_path, monkeypatch) -> None:
     assert "Error [RW-VALIDATION]:" in invalid_limit.output
 
 
-def test_api_validation_error(tmp_path) -> None:
-    """Empty graph fields are translated to the project validation exception."""
+def test_cli_add_accepts_split_arguments(tmp_path, monkeypatch) -> None:
+    """The add command accepts split arguments and multiword object values."""
+    monkeypatch.setattr(settings, "db_path", str(tmp_path / "cli-add.db"))
+    runner = CliRunner()
+
+    add_result = runner.invoke(
+        cli,
+        ["add", "张三", "住在", "北京市", "朝阳区"],
+    )
+    assert add_result.exit_code == 0
+    assert "✅ 成功: 记忆已写入，ID:" in add_result.output
+
+    history_result = runner.invoke(cli, ["history", "张三", "住在"])
+    assert history_result.exit_code == 0
+    assert "北京市 朝阳区" in history_result.output
+
+
+def test_cli_history_reports_missing_fact(tmp_path, monkeypatch) -> None:
+    """The history command handles an unknown subject and predicate."""
+    monkeypatch.setattr(settings, "db_path", str(tmp_path / "cli-history.db"))
+    result = CliRunner().invoke(cli, ["history", "未知人物", "未知关系"])
+
+    assert result.exit_code == 0
+    assert "未找到事实历史" in result.output
+
+
+@pytest.mark.parametrize(
+    ("subject", "predicate", "object_"),
+    [
+        ("", "认识", "李四"),
+        ("张三", "", "李四"),
+        ("张三", "认识", ""),
+        ("x" * 10_001, "认识", "李四"),
+        ("张三", "x" * 10_001, "李四"),
+        ("张三", "认识", "x" * 10_001),
+    ],
+)
+def test_api_rejects_invalid_triple_fields(
+    tmp_path,
+    subject: str,
+    predicate: str,
+    object_: str,
+) -> None:
+    """Empty or overlong graph fields raise the public validation exception."""
     api = RecallWeaverAPI(str(tmp_path / "validation.db"))
 
     with pytest.raises(ValidationError):
-        api.remember_triple("", "认识", "李四")
+        api.remember_triple(subject, predicate, object_)
